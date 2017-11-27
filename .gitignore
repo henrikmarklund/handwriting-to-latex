@@ -9,3 +9,4 @@ data/
 *.db
 .idea/
 __pycache__/
+output/*
