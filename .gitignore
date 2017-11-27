@@ -1,0 +1,11 @@
+*.csv
+./2017q2/*
+./data/*
+data/
+.DS_Store
+*.DS_Store
+*.ipynb_checkpoints
+*.pyc
+*.db
+.idea/
+__pycache__/
