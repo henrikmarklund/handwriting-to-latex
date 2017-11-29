@@ -1,7 +1,7 @@
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
-ON_FLOYDHUB = False
+ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -9,13 +9,11 @@ if (ON_FLOYDHUB):
     # print("Libcudnn Version: ", libcudnn.__version__)
 
 import numpy as np
-
+import pickle
 
 
 import tensorflow as tf
 print("Tensorflow Version: ", tf.__version__)
-
-exit(8008)
 
 from tensorflow.python.layers import core as layers_core
 
@@ -36,8 +34,8 @@ import datetime
 
 max_token_length = 50
 mini_batch_size = 16
-max_train_num_samples = 5000
-max_val_num_samples = 100
+max_train_num_samples = 10000000
+max_val_num_samples = 1000
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
@@ -670,6 +668,8 @@ def main():
 
     gogo_gadget_saver = tf.train.Saver()
 
+    log = ['step', 'ie', 'loss', 'norm', 'time']
+
     for epoch in range(num_epochs):
         print("Epoch: ", epoch)
 
@@ -702,21 +702,19 @@ def main():
                 _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
                                                                          feed_dict=input_data)
 
-            print("i: ", i)
-            print('Step %d: loss = %.2f' % (glob_step, loss))
-            print("Learning rate: ", lr_rate)
-            print("Global grad norm: ", global_grad_norm)
 
             end_time = datetime.datetime.now()
             delta = end_time - start_time
-            print("Time for batch in seconds: %.1f" % delta.total_seconds())
+            #print("Time for batch in seconds: %.1f" % delta.total_seconds())
+            log.append([glob_step, epoch * i + i, loss, grad_norms, delta ])
 
             # Write to tensorboard every 10th step
             # if glob_step % 40 == 0:
             #    train_writer.add_summary(summary, glob_step)
             ## Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
 
-        save_path = gogo_gadget_saver.save(sess, output + 'model.ckpt')
+        pickle.dump(log, file=output + 'pickle')
+        save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/model.ckpt')
         print("Model saved in file: %s" % save_path)
 
         if calculate_val_loss:
