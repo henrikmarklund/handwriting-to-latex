@@ -353,6 +353,7 @@ def get_validation_loss(num_val_batches,
 
 def main():
     print("Tensorflow Version: ", tf.__version__)
+    return
     # Create the vocabulary
 
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
@@ -593,6 +594,8 @@ def main():
     for param in params:
         to_summary = tf.summary.histogram(param.name + '/weight', param)
 
+    # config=tf.ConfigProto(log_device_placement=True) logs whether it runs on the gpus
+    #sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
     sess = tf.Session()
 
     merged = tf.summary.merge_all()
