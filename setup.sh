@@ -37,4 +37,8 @@ ls /usr/local/cuda/lib64/ | grep "libcudn*"
 echo "include: "
 ls /usr/local/cuda/include/ | grep "libcudn*"
 
+which pip
+whiich pip3
+
+pip3 install cudnn-python-wrappers
 pip3 install tf-nightly-gpu
