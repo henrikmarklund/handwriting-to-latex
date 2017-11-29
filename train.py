@@ -5,11 +5,12 @@ ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
+    # import libcudnn
+    # print("Libcudnn Version: ", libcudnn.__version__)
 
 import numpy as np
 
-import libcudnn
-print("Libcudnn Version: ", libcudnn.__version__)
+
 
 import tensorflow as tf
 print("Tensorflow Version: ", tf.__version__)
