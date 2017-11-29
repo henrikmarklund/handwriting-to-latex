@@ -1,5 +1,20 @@
-import tensorflow as tf
+## FLOYDHUB CONFIG
+data = '../data/'
+output = '../output/'
+ON_FLOYDHUB = False
+if (ON_FLOYDHUB):
+    data = '/data/'
+    output = '/output/'
+
 import numpy as np
+
+import libcudnn
+print("Libcudnn Version: ", libcudnn.__version__)
+
+import tensorflow as tf
+print("Tensorflow Version: ", tf.__version__)
+
+exit(8008)
 
 from tensorflow.python.layers import core as layers_core
 
@@ -28,13 +43,7 @@ num_units = 512 # LSTM number of units
 calculate_val_loss = False
 num_epochs = 2
 
-## FLOYDHUB CONFIG
-data = '../data/'
-output = '../output/'
-ON_FLOYDHUB = False
-if (ON_FLOYDHUB):
-    data = '/data/'
-    output = '/output/'
+
 
 
 # 2. Try runnin it on the GPU for 1 hour (I suggest having a cap of token length 50, but increase the num samples to a lot) (All in the Config up top). If you want to play with different learning rates, I've not created a config for this yet. Rather there is a function called: get_learning_rate that handles it all.
@@ -352,8 +361,6 @@ def get_validation_loss(num_val_batches,
 
 
 def main():
-    print("Tensorflow Version: ", tf.__version__)
-    return
     # Create the vocabulary
 
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
