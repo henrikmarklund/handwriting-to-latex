@@ -10,3 +10,4 @@ data/
 .idea/
 __pycache__/
 output/*
+.floyd*
