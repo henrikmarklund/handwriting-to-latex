@@ -352,7 +352,7 @@ def get_validation_loss(num_val_batches,
 
 
 def main():
-    print(tf.__version__)
+    print("Tensorflow Version: ", tf.__version__)
     # Create the vocabulary
 
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
