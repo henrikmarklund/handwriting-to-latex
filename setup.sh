@@ -2,6 +2,8 @@
 
 #unused alternative: ln -s YOURS_PATH_TO_cuDNN/libcudnn.so.7.0.3 YOURS_PATH_TO_cuDNN/libcudnn.so.6
 
+
+
 echo 'PATH is:'
 echo $PATH
 echo 'LD_LIBRARY_PATH is:'
@@ -10,6 +12,8 @@ echo "lib64:"
 ls /usr/local/cuda/lib64/ | grep "libcudn*"
 echo "include: "
 ls /usr/local/cuda/include/ | grep "libcudn*"
+
+ARG CUDNN_TAR_FILE=cudnn-8.0-linux-x64-v6.0.tgz
 
 wget http://developer.download.nvidia.com/compute/redist/cudnn/v6.0/${CUDNN_TAR_FILE} -P /root/downloads && \
 cd /root/downloads && \
@@ -38,7 +42,7 @@ echo "include: "
 ls /usr/local/cuda/include/ | grep "libcudn*"
 
 which pip
-whiich pip3
+which pip3
 
 pip3 install cudnn-python-wrappers
 pip3 install tf-nightly-gpu
