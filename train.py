@@ -2,9 +2,9 @@
 data = '../data/'
 output = '../output/'
 
-SCRATCH = True # build the dataset from scratch, or load from Pickle
+SCRATCH = False # build the dataset from scratch, or load from Pickle
 
-ON_FLOYDHUB = True
+ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -38,14 +38,32 @@ import datetime
 
 max_token_length = 50
 mini_batch_size = 16
-max_train_num_samples = 100000 #it crashes somewhere after Id 71501
-max_val_num_samples = 2000
+max_train_num_samples = 1000 #it crashes somewhere after Id 71501
+max_val_num_samples = 100
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
 calculate_val_loss = False
 num_epochs = 2
-
+buckets_dict = {(40, 160): 0,
+                (40, 200): 1,
+                (40, 240): 2,
+                (40, 280): 3,
+                (40, 320): 4,
+                (40, 360): 5,
+                (50, 120): 6,
+                (50, 200): 7,
+                (50, 240): 8,
+                (50, 280): 9,
+                (50, 320): 10,
+                (50, 360): 11,
+                (50, 400): 12,
+                (60, 360): 13,
+                (100, 360): 14,
+                (100, 500): 15,
+                (160, 400): 16,
+                (200, 500): 17,
+                (800, 800): 18}
 
 
 
@@ -90,26 +108,6 @@ def pad_images(data_batch):
 
 
 def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_samples=5000):
-    buckets_dict = {(40, 160): 0,
-                    (40, 200): 1,
-                    (40, 240): 2,
-                    (40, 280): 3,
-                    (40, 320): 4,
-                    (40, 360): 5,
-                    (50, 120): 6,
-                    (50, 200): 7,
-                    (50, 240): 8,
-                    (50, 280): 9,
-                    (50, 320): 10,
-                    (50, 360): 11,
-                    (50, 400): 12,
-                    (60, 360): 13,
-                    (100, 360): 14,
-                    (100, 500): 15,
-                    (160, 400): 16,
-                    (200, 500): 17,
-                    (800, 800): 18}
-
     buckets = [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []]
 
     dataset = []
@@ -141,13 +139,13 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
             tokens = token_sequence.split()
 
             file_name = str(idx) + '.png'
-            image = cv2.imread(image_folder + file_name, 0)
+            image = cv2.imread(image_folder + file_name, cv2.IMREAD_GRAYSCALE)
 
             if image is None:
                 #what does this even mean?
                 print("Id was none: ", idx)
                 continue
-
+            image = image.astype(np.uint8)
             if len(tokens) <= max_token_length:
 
                 token_sequence = '**start** ' + token_sequence
@@ -205,7 +203,6 @@ def split_dataset(dataset):
     sequence_lengths_batches = []
 
     for batch in range(len(dataset) ):
-        print("batch: ", batch)
         temp = dataset[batch]
         if (len(temp) == 0):
             bob = None
@@ -222,7 +219,7 @@ def split_dataset(dataset):
         target_texts_batches.append(target_text)
 
         decoder_length = temp[:, 2]
-        decoder_length = np.array(decoder_length, dtype=np.int32)
+        decoder_length = np.array(decoder_length, dtype=np.uint16)
         sequence_lengths_batches.append(decoder_length)
 
     # Make sure we have equal number of batches
@@ -258,10 +255,10 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
 
         decoder_input_data = np.zeros(
             (batch_size, max_decoder_seq_length),
-            dtype='int32')
+            dtype='uint16')
         decoder_target_data = np.zeros(
             (batch_size, max_decoder_seq_length),
-            dtype='int32')
+            dtype='uint16')
 
         num_other = 0
 
@@ -382,6 +379,24 @@ def get_validation_loss(num_val_batches,
     return val_loss
 
 
+def get_id_for_bucket(img_batches):
+    shapes_already_found = []
+    batch_ids = []
+    for idx, batch in enumerate(img_batches):
+        image = img_batches[0][0]
+        shape = np.squeeze(image).shape
+
+        for j in range(18, -1, -1):
+
+            if buckets_dict[shape] == j:
+                #print("Found batch with shape: ", buckets_dict[shape])
+                #print("Batch id: ", idx)
+                shapes_already_found.append(shape)
+
+        batch_ids.append(idx)
+
+    return batch_ids
+
 
 def main():
     # Create the vocabulary
@@ -427,7 +442,7 @@ def main():
     print("Num val samples: ", num_val_samples)
 
     #Encoder
-    ## One of Genthails's encoder implementations (from paper)
+    #One of Genthails's encoder implementations (from paper)
     img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
 
     img = tf.cast(img, tf.float32) / 255
@@ -501,9 +516,9 @@ def main():
     # Decoder: from seq2seq tutorial
     embedding_size = 80  # In Genthail's paper he says he has 80 embeddings which I believe corresponds to embedding_size
 
-    decoder_inputs = tf.placeholder(tf.int32, [None, None],
+    decoder_inputs = tf.placeholder(tf.uint16, [None, None],
                                     name='decoder_inputs')  # Supposed to be a sequence of numbers corresponding to the different tokens in the sentence
-
+    decoder_inputs = tf.cast(decoder_inputs, tf.int32)
     # Embedding of target tokens
 
     # Embedding matrix
@@ -545,7 +560,8 @@ def main():
     else:
         decoder_initial_state = encoder_state
 
-    decoder_lengths = tf.placeholder(tf.int32, [None])
+    decoder_lengths = tf.placeholder(tf.uint16, [None])
+    decoder_lengths = tf.cast(decoder_lengths, tf.int32)
 
     # Helper
     helper = tf.contrib.seq2seq.TrainingHelper(
@@ -571,8 +587,8 @@ def main():
     # target_weights = tf.cast(target_weights, tf.float32)
 
     # Supposed to be a sequence of numbers corresponding to the different tokens in the sentence
-    decoder_outputs = tf.placeholder(tf.int32, [None, None], name='decoder_outputs')
-
+    decoder_outputs = tf.placeholder(tf.uint16, [None, None], name='decoder_outputs')
+    decoder_outputs = tf.cast(decoder_outputs, tf.int32)
     learning_rate = tf.placeholder(tf.float32, shape=[])
 
     # Loss function
@@ -689,10 +705,13 @@ def main():
 
     log = ['step', 'ie', 'loss', 'norm', 'time']
 
+    _list = get_id_for_bucket(train_encoder_input_data_batches)
+
     for epoch in range(num_epochs):
         print("Epoch: ", epoch)
 
-        for i in range(num_train_batches):
+        #for i in range(num_train_batches):
+        for i in _list:
 
             # Calculate running time for batch
             start_time = datetime.datetime.now()
