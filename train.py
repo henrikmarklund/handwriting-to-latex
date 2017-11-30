@@ -27,7 +27,7 @@ if (ON_FLOYDHUB):
     output = '/output/'
 
 ## CONFIG:
-num_epochs = 20
+num_epochs = 10
 max_token_length = 50
 mini_batch_size = 16
 max_train_num_samples = 100000
