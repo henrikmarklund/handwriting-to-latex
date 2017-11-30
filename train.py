@@ -402,27 +402,27 @@ def main():
     if (SCRATCH):
         train_dataset = load_data('train', mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
         val_dataset = load_data('train', mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
-        def dump_dataset(set, name):
+
+        def dump_data_set(set, name):
             filename = output + 'pickles/' + name + '.pkl'
             if not os.path.exists(output + 'pickles'):
                 os.makedirs(output + 'pickles')
             f = open(filename, 'wb+')
-            pickle.dump(dataset, f)
+            pickle.dump(set, f)
             print('dumped')
             f.close()
-        dump_dataset(train_dataset, 'train')
-        dump_dataset(val_dataset, 'val')
+        dump_data_set(train_dataset, 'train')
+        dump_data_set(val_dataset, 'val')
     else:
-        def load_dataset(name):
+
+        def load_data_set(name):
             filename = output + 'pickles/' + name + '.pkl'
             f = open(filename, 'rb')
-            dataset = pickle.load(f)
+            data_set = pickle.load(f)
             f.close()
-            return dataset
+            return data_set
         train_dataset = load_data('train')
         val_dataset = load_data('val')
-
-
 
     train_encoder_input_data_batches = train_dataset[0]
     train_target_texts_batches = train_dataset[1]
