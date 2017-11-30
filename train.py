@@ -705,13 +705,13 @@ def main():
 
     log = [['step', 'epoch', 'i', 'loss', 'time', 'norm']]
 
-    _list = get_id_for_bucket(train_encoder_input_data_batches)
+    #_list = get_id_for_bucket(train_encoder_input_data_batches)
 
     for epoch in range(num_epochs):
         print("Epoch: ", epoch)
 
-        #for i in range(num_train_batches):
-        for i in _list:
+        for i in range(num_train_batches):
+        #for i in _list:
 
             # Calculate running time for batch
             start_time = datetime.datetime.now()
