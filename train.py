@@ -1,3 +1,21 @@
+import numpy as np
+import pickle
+import os
+import pandas as pd
+import tensorflow as tf
+from tensorflow.python.layers import core as layers_core
+from matplotlib import pyplot as plt
+import cv2
+import datetime
+
+### Outline
+
+# 1. Encoder
+# 2. Decoder
+# 3. Optimization and training
+
+# 4. Inference
+
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
@@ -8,41 +26,17 @@ if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
 
-import numpy as np
-import pickle
-import os
-import pandas as pd
-
-
-import tensorflow as tf
-print("\n======= Tensorflow Version: %s ======", tf.__version__)
-
-from tensorflow.python.layers import core as layers_core
-
-from matplotlib import pyplot as plt
-import cv2
-import datetime
-
-
-### Outline
-
-# 1. Encoder
-# 2. Decoder
-# 3. Optimization and training
-
-# 4. Inference
-
 ## CONFIG:
-
+num_epochs = 20
 max_token_length = 50
 mini_batch_size = 16
-max_train_num_samples = 32
-max_val_num_samples = 8
+max_train_num_samples = 100000
+max_val_num_samples = 1000
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
 calculate_val_loss = False
-num_epochs = 2
+
 buckets_dict = {(40, 160): 0,
                 (40, 200): 1,
                 (40, 240): 2,
@@ -764,13 +758,13 @@ def main():
                 summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
-                save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/inner.ckpt')
+                save_path = gogo_gadget_saver.save(sess, output + 'checkpoints/inner.ckpt')
                 _e = datetime.datetime.now()
                 print("Model saved in file: %s" % save_path)
                 print("checkpoint cost: ", _e - _s)
 
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
-        save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/model_'+str(epoch)+'.ckpt')
+        save_path = gogo_gadget_saver.save(sess, output + 'checkpoints/model_'+str(epoch)+'.ckpt')
         print("Model saved in file: %s" % save_path)
         if calculate_val_loss:
             val_loss = get_validation_loss(num_val_batches,
