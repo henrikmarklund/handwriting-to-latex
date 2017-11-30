@@ -33,6 +33,8 @@ mini_batch_size = 16
 max_train_num_samples = 100000
 max_val_num_samples = 1000
 use_attention = True # I have not tried without attention so not sure if it breaks
+
+# TODO, WARNING: seems unused
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
 calculate_val_loss = False
