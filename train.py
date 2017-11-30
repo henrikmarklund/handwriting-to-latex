@@ -20,8 +20,8 @@ import datetime
 data = '../data/'
 output = '../output/'
 
-SCRATCH = True # build the dataset from scratch, or load from Pickle
-ON_FLOYDHUB = True
+
+ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -375,6 +375,34 @@ def get_id_for_bucket(img_batches):
     return batch_ids
 
 
+def dump_data_set(set, name):
+    filename = output + 'pickles/' + name + '.pkl'
+    if not os.path.exists(output + 'pickles'):
+        os.makedirs(output + 'pickles')
+    f = open(filename, 'wb+')
+    pickle.dump(set, f)
+    print('dumped')
+    f.close()
+
+
+def load_data_pickle(name):
+    print('loading: ', name)
+    filename = output + 'pickles/' + name + '.pkl'
+    f = open(filename, 'rb')
+    data_set = pickle.load(f)
+    f.close()
+    return data_set
+
+def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index):  
+    if (fresh):
+        _set = load_data(name, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index)        
+        dump_data_set(_set, name)
+    else:
+        _set = load_data_pickle(name)
+
+    return _set
+
+
 def main():
     # Create the vocabulary
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
@@ -393,44 +421,22 @@ def main():
     print("\n ======================= Loading Data =======================")
     #new cell
 
-    if (SCRATCH):
-        train_dataset = load_data('train', mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
-        val_dataset = load_data('train', mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
-
-        def dump_data_set(set, name):
-            filename = output + 'pickles/' + name + '.pkl'
-            if not os.path.exists(output + 'pickles'):
-                os.makedirs(output + 'pickles')
-            f = open(filename, 'wb+')
-            pickle.dump(set, f)
-            print('dumped')
-            f.close()
-        dump_data_set(train_dataset, 'train')
-        dump_data_set(val_dataset, 'val')
-    else:
-
-        def load_data_set(name):
-            filename = output + 'pickles/' + name + '.pkl'
-            f = open(filename, 'rb')
-            data_set = pickle.load(f)
-            f.close()
-            return data_set
-        train_dataset = load_data('train')
-        val_dataset = load_data('val')
-
+    train_dataset = get_data_somehow('train', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    val_dataset = get_data_somehow('val', True, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    
     train_encoder_input_data_batches = train_dataset[0]
     train_target_texts_batches = train_dataset[1]
     train_sequence_lengths_batches = train_dataset[2]
     train_decoder_input_data_batches = train_dataset[3]
     train_decoder_target_data_batches = train_dataset[4]
-    print("\n ======================= Train Data Loaded =======================")
 
     val_encoder_input_data_batches = val_dataset[0]
     val_target_texts_batches = val_dataset[1]
     val_sequence_lengths_batches = val_dataset[2]
     val_decoder_input_data_batches = val_dataset[3]
     val_decoder_target_data_batches = val_dataset[4]
-    print("\n ======================= Val Data Loaded =======================")
+    print("\n ======================= Data Loaded =======================")
+    
     num_train_batches = len(train_target_texts_batches)
     num_val_batches = len(val_target_texts_batches)
     num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
