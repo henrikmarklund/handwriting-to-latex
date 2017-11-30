@@ -14,7 +14,7 @@ import os
 
 
 import tensorflow as tf
-print("Tensorflow Version: ", tf.__version__)
+print("\n======= Tensorflow Version: %s ======", tf.__version__)
 
 from tensorflow.python.layers import core as layers_core
 
