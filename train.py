@@ -2,14 +2,11 @@
 data = '../data/'
 output = '../output/'
 
-SCRATCH = False # build the dataset from scratch, or load from Pickle
-
-ON_FLOYDHUB = False
+SCRATCH = True # build the dataset from scratch, or load from Pickle
+ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
-    # import libcudnn
-    # print("Libcudnn Version: ", libcudnn.__version__)
 
 import numpy as np
 import pickle
@@ -38,8 +35,8 @@ import datetime
 
 max_token_length = 50
 mini_batch_size = 16
-max_train_num_samples = 1000 #it crashes somewhere after Id 71501
-max_val_num_samples = 100
+max_train_num_samples = 10
+max_val_num_samples = 10
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
@@ -428,9 +425,9 @@ def main():
     val_sequence_lengths_batches = val_dataset[2]
     val_decoder_input_data_batches = val_dataset[3]
     val_decoder_target_data_batches = val_dataset[4]
+
     num_train_batches = len(train_target_texts_batches)
     num_val_batches = len(val_target_texts_batches)
-
     num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
     num_val_samples = (num_val_batches - 1) * mini_batch_size + val_target_texts_batches[-1].shape[0]
 
@@ -703,7 +700,7 @@ def main():
 
     gogo_gadget_saver = tf.train.Saver()
 
-    log = ['step', 'ie', 'loss', 'norm', 'time']
+    log = [['step', 'epoch', 'i', 'loss', 'time', 'norm']]
 
     _list = get_id_for_bucket(train_encoder_input_data_batches)
 
@@ -726,36 +723,45 @@ def main():
                           decoder_outputs: train_decoder_target_data_batches[i],
                           learning_rate: lrate
                           }
-            # Only catch important info for tracking in the beginning of the epoch
-            if (i == 0):
-                output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
-                                  global_step]
-                summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
-                                                                                              feed_dict=input_data)
 
-                train_writer.add_summary(summary, glob_step)
-
-            else:
-                output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
-                _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
+            output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
+            _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
                                                                          feed_dict=input_data)
 
 
             end_time = datetime.datetime.now()
             delta = end_time - start_time
-            #print("Time for batch in seconds: %.1f" % delta.total_seconds())
-            log.append([glob_step, epoch * i + i, loss, grad_norms, delta ])
+            # print("Time for batch in seconds: %.1f" % delta.total_seconds())
+            stats = [glob_step, epoch, i, loss, delta, global_grad_norm]
 
-            # Write to tensorboard every 10th step
-            # if glob_step % 40 == 0:
-            #    train_writer.add_summary(summary, glob_step)
-            ## Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
-        f = open(output + 'pickels/log', 'wb+')
-        pickle.dump(log, f)
-        f.close()
-        save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/model.ckpt')
+            log.append(stats)
+
+            # Write to tensorboard
+            if glob_step % 200 == 0:
+                _s = datetime.datetime.now()
+                pair = zip(log[0], stats)
+                for x, y in pair:
+                    print(x,y)
+
+                if not os.path.exists(output + 'pickles'):
+                    os.makedirs(output + 'pickles')
+                f = open(output + 'pickles/robin-thicke-logs-a-big.pkl', 'wb+')
+                pickle.dump(log, f)
+                f.close()
+
+                output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
+                                  global_step]
+                summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
+                                                                                              feed_dict=input_data)
+                train_writer.add_summary(summary, glob_step)
+                save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/inner.ckpt')
+                _e = datetime.datetime.now()
+                print("Model saved in file: %s" % save_path)
+                print("checkpoint cost: ", _e - _s)
+
+        # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
+        save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/model_'+str(epoch)+'.ckpt')
         print("Model saved in file: %s" % save_path)
-
         if calculate_val_loss:
             val_loss = get_validation_loss(num_val_batches,
                                            img, val_encoder_input_data_batches,
