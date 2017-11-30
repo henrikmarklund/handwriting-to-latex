@@ -1,6 +1,9 @@
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
+
+SCRATCH = True # build the dataset from scratch, or load from Pickle
+
 ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
@@ -10,6 +13,7 @@ if (ON_FLOYDHUB):
 
 import numpy as np
 import pickle
+import os
 
 
 import tensorflow as tf
@@ -33,9 +37,9 @@ import datetime
 ## CONFIG:
 
 max_token_length = 50
-mini_batch_size = 16
-max_train_num_samples = 10000000
-max_val_num_samples = 1000
+mini_batch_size = 20
+max_train_num_samples = 100000 #it crashes somewhere after Id 71501
+max_val_num_samples = 2000
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
@@ -131,7 +135,6 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
     with open(formula_file_path, "r") as myfile:
 
         for idx, token_sequence in enumerate(myfile):
-
             examples_counter += 1
             # Check token size:
             token_sequence = token_sequence.rstrip('\n')
@@ -141,7 +144,8 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
             image = cv2.imread(image_folder + file_name, 0)
 
             if image is None:
-                print("Id:", idx)
+                #what does this even mean?
+                print("Id was none: ", idx)
                 continue
 
             if len(tokens) <= max_token_length:
@@ -182,10 +186,12 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
                     padded_data_batch = np.array(padded_data_batch)
                     dataset.append(padded_data_batch)
                     data_batch = []
+        if (len(data_batch) != 0):
+            # for some reason the algorithm generates empty data batches sometimes
+            padded_data_batch = pad_images(data_batch)
+            padded_data_batch = np.array(padded_data_batch)
+            dataset.append(padded_data_batch)
 
-        padded_data_batch = pad_images(data_batch)
-        padded_data_batch = np.array(padded_data_batch)
-        dataset.append(padded_data_batch)
 
     return dataset
 
@@ -193,15 +199,17 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
 # dataset is list of all batches containing (image, target_text, sequence_length)
 # we split that up into three lists
 # Adam code review note: this seems verbose and I don't quite get it
-
-
 def split_dataset(dataset):
     encoder_input_data_batches = []
     target_texts_batches = []
     sequence_lengths_batches = []
 
-    for batch in range(len(dataset)):
-        image_batch = dataset[batch][:, 0]
+    for batch in range(len(dataset) ):
+        print("batch: ", batch)
+        temp = dataset[batch]
+        if (len(temp) == 0):
+            bob = None
+        image_batch = temp[:, 0]
         image_batch = image_batch.tolist()
         image_batch = np.array(image_batch)
         # Add one dimension so that the conv net can take it (it expects four dimensions)
@@ -210,10 +218,10 @@ def split_dataset(dataset):
 
         encoder_input_data_batches.append(image_batch)
 
-        target_text = dataset[batch][:, 1]
+        target_text = temp[:, 1]
         target_texts_batches.append(target_text)
 
-        decoder_length = dataset[batch][:, 2]
+        decoder_length = temp[:, 2]
         decoder_length = np.array(decoder_length, dtype=np.int32)
         sequence_lengths_batches.append(decoder_length)
 
@@ -271,7 +279,7 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
                         decoder_target_data[i, t - 1] = target_token_index[token]
 
                 else:
-                    print("Token not in vocabulary (setting to **unknown**): ", token)
+                    print("Token %s in %d not in V" % (token, idx))
                     num_other = num_other + 1
                     decoder_input_data[i, t] = target_token_index['**unknown**']
 
@@ -290,16 +298,32 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
 
 
 def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, target_token_index):
-    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
+    dataset = None
+    filename = output + 'pickles/dataset.pkl'
+    if(SCRATCH):
+        dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
                             max_num_samples=max_num_samples)
+        filename = output + 'pickles/dataset.pkl'
+        if not os.path.exists(output + 'pickles'):
+            os.makedirs(output + 'pickles')
+        f = open(filename, 'wb+')
+        pickle.dump(dataset, f)
+        print('dumped')
+        f.close()
+    else:
+        f = open(filename, 'rb')
+        dataset = pickle.load(f)
+        f.close()
 
     for k in range(len(dataset) - 1):
         assert (len(dataset[k]) == mini_batch_size)
 
+    print("\n ======================= Raw Data Loaded =======================")
     encoder_input_data_batches, target_texts_batches, sequence_lengths_batches = split_dataset(dataset)
+    print("\n ======================= Encoder Data Loaded =======================")
     decoder_input_data_batches, decoder_target_data_batches = create_output_int_sequences(target_texts_batches,
                                                                                           sequence_lengths_batches, target_token_index)
-
+    print("\n ======================= Decoder Data Loaded =======================")
     return encoder_input_data_batches, target_texts_batches, sequence_lengths_batches, decoder_input_data_batches, decoder_target_data_batches
 
 
@@ -361,7 +385,6 @@ def get_validation_loss(num_val_batches,
 
 def main():
     # Create the vocabulary
-
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
 
     token_vocabulary.extend(get_vocabulary("train"))
@@ -375,7 +398,7 @@ def main():
 
     reverse_target_token_index = dict(
         (i, char) for char, i in target_token_index.items())
-
+    print("\n ======================= Loading Data =======================")
     #new cell
     train_dataset = load_data('train', mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
     train_encoder_input_data_batches = train_dataset[0]
@@ -390,7 +413,6 @@ def main():
     val_sequence_lengths_batches = val_dataset[2]
     val_decoder_input_data_batches = val_dataset[3]
     val_decoder_target_data_batches = val_dataset[4]
-
     num_train_batches = len(train_target_texts_batches)
     num_val_batches = len(val_target_texts_batches)
 
@@ -477,9 +499,6 @@ def main():
         attention_depth, attention_states, scale=True)  # Can try scale = False
 
     # Decoder: from seq2seq tutorial
-
-
-
     embedding_size = 80  # In Genthail's paper he says he has 80 embeddings which I believe corresponds to embedding_size
 
     decoder_inputs = tf.placeholder(tf.int32, [None, None],
