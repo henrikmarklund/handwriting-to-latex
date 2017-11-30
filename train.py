@@ -37,7 +37,7 @@ import datetime
 ## CONFIG:
 
 max_token_length = 50
-mini_batch_size = 20
+mini_batch_size = 16
 max_train_num_samples = 100000 #it crashes somewhere after Id 71501
 max_val_num_samples = 2000
 use_attention = True # I have not tried without attention so not sure if it breaks
@@ -731,8 +731,9 @@ def main():
             # if glob_step % 40 == 0:
             #    train_writer.add_summary(summary, glob_step)
             ## Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
-
-        pickle.dump(log, file=output + 'pickle')
+        f = open(output + 'pickels/log', 'wb+')
+        pickle.dump(log, f)
+        f.close()
         save_path = gogo_gadget_saver.save(sess, output + '/checkpoints/model.ckpt')
         print("Model saved in file: %s" % save_path)
 
