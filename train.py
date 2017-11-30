@@ -11,6 +11,7 @@ if (ON_FLOYDHUB):
 import numpy as np
 import pickle
 import os
+import pandas as pd
 
 
 import tensorflow as tf
@@ -35,8 +36,8 @@ import datetime
 
 max_token_length = 50
 mini_batch_size = 16
-max_train_num_samples = 10
-max_val_num_samples = 10
+max_train_num_samples = 32
+max_val_num_samples = 8
 use_attention = True # I have not tried without attention so not sure if it breaks
 use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
 num_units = 512 # LSTM number of units
@@ -295,32 +296,14 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
 
 
 def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, target_token_index):
-    dataset = None
-    filename = output + 'pickles/dataset.pkl'
-    if(SCRATCH):
-        dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
+    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
                             max_num_samples=max_num_samples)
-        filename = output + 'pickles/dataset.pkl'
-        if not os.path.exists(output + 'pickles'):
-            os.makedirs(output + 'pickles')
-        f = open(filename, 'wb+')
-        pickle.dump(dataset, f)
-        print('dumped')
-        f.close()
-    else:
-        f = open(filename, 'rb')
-        dataset = pickle.load(f)
-        f.close()
 
     for k in range(len(dataset) - 1):
         assert (len(dataset[k]) == mini_batch_size)
-
-    print("\n ======================= Raw Data Loaded =======================")
     encoder_input_data_batches, target_texts_batches, sequence_lengths_batches = split_dataset(dataset)
-    print("\n ======================= Encoder Data Loaded =======================")
     decoder_input_data_batches, decoder_target_data_batches = create_output_int_sequences(target_texts_batches,
                                                                                           sequence_lengths_batches, target_token_index)
-    print("\n ======================= Decoder Data Loaded =======================")
     return encoder_input_data_batches, target_texts_batches, sequence_lengths_batches, decoder_input_data_batches, decoder_target_data_batches
 
 
@@ -415,20 +398,45 @@ def main():
         (i, char) for char, i in target_token_index.items())
     print("\n ======================= Loading Data =======================")
     #new cell
-    train_dataset = load_data('train', mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+
+    if (SCRATCH):
+        train_dataset = load_data('train', mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+        val_dataset = load_data('train', mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
+        def dump_dataset(set, name):
+            filename = output + 'pickles/' + name + '.pkl'
+            if not os.path.exists(output + 'pickles'):
+                os.makedirs(output + 'pickles')
+            f = open(filename, 'wb+')
+            pickle.dump(dataset, f)
+            print('dumped')
+            f.close()
+        dump_dataset(train_dataset, 'train')
+        dump_dataset(val_dataset, 'val')
+    else:
+        def load_dataset(name):
+            filename = output + 'pickles/' + name + '.pkl'
+            f = open(filename, 'rb')
+            dataset = pickle.load(f)
+            f.close()
+            return dataset
+        train_dataset = load_data('train')
+        val_dataset = load_data('val')
+
+
+
     train_encoder_input_data_batches = train_dataset[0]
     train_target_texts_batches = train_dataset[1]
     train_sequence_lengths_batches = train_dataset[2]
     train_decoder_input_data_batches = train_dataset[3]
     train_decoder_target_data_batches = train_dataset[4]
+    print("\n ======================= Train Data Loaded =======================")
 
-    val_dataset = load_data('train', mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
     val_encoder_input_data_batches = val_dataset[0]
     val_target_texts_batches = val_dataset[1]
     val_sequence_lengths_batches = val_dataset[2]
     val_decoder_input_data_batches = val_dataset[3]
     val_decoder_target_data_batches = val_dataset[4]
-
+    print("\n ======================= Val Data Loaded =======================")
     num_train_batches = len(train_target_texts_batches)
     num_val_batches = len(val_target_texts_batches)
     num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
@@ -703,7 +711,7 @@ def main():
 
     gogo_gadget_saver = tf.train.Saver()
 
-    log = [['step', 'epoch', 'i', 'loss', 'time', 'norm']]
+    log = pd.DataFrame([['step', 'epoch', 'i', 'loss', 'time', 'norm']])
 
     #_list = get_id_for_bucket(train_encoder_input_data_batches)
 
@@ -748,9 +756,8 @@ def main():
 
                 if not os.path.exists(output + 'pickles'):
                     os.makedirs(output + 'pickles')
-                f = open(output + 'pickles/robin-thicke-logs-a-big.pkl', 'wb+')
-                pickle.dump(log, f)
-                f.close()
+
+                log.to_csv(output + 'pickles/robin-thicke-logs-a-big.csv', mode='w+')
 
                 output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
                                   global_step]
