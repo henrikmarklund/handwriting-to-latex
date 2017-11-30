@@ -154,6 +154,9 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
 
                 relevant_bucket_id = buckets_dict[image.shape]
 
+                if relevant_bucket_id == 18 or relevant_bucket_id == 17:
+                    continue
+
                 buckets[relevant_bucket_id].append([image, token_sequence, seq_length])
 
                 if len(buckets[buckets_dict[image.shape]]) == mini_batch_size:
