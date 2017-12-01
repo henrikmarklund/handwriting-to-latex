@@ -15,6 +15,20 @@ import datetime
 
 # 4. Inference
 
+## CONFIG:
+num_epochs = 10
+max_token_length = 50
+mini_batch_size = 16
+max_train_num_samples = 100000
+max_val_num_samples = 1000
+use_attention = True
+use_encoding_average_as_initial_state = False
+num_units = 512  # LSTM number of units
+calculate_val_loss = False
+RESTORE_FROM_CHECKPOINT = True
+CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
+max_token_length = 50
+
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
@@ -388,7 +402,7 @@ def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_trai
     return _set
 
 
-def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state):
+def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
     # Encoder
     # One of Genthails's encoder implementations (from paper)
     img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
@@ -479,8 +493,6 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     #   decoder_emb_inp: [max_time, batch_size, embedding_size]
     decoder_emb_inp = tf.nn.embedding_lookup(
         embedding_decoder, decoder_inputs)
-
-    print(decoder_emb_inp.shape)
 
     # Build RNN cell
     # decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
@@ -585,28 +597,94 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
 
         # config=tf.ConfigProto(log_device_placement=True) logs whether it runs on the gpus
         # sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
-    merged = tf.summary.merge_all()
 
-    output_tensors = [merged, update_step, train_loss, optimizer, global_norm, gradient_norms,
-                                  global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate]
-    return output_tensors
+
+    merged = tf.summary.merge_all()
+    if training:
+        return [merged,
+                update_step,
+                train_loss,
+                optimizer,
+                global_norm,
+                gradient_norms,
+                global_step,
+                img,
+                decoder_lengths,
+                decoder_inputs,
+                decoder_outputs,
+                learning_rate]
+    else:
+        return embedding_decoder, decoder_cell, decoder_initial_state, projection_layer, img
+
+
+def inference_tensor(target_token_index,
+              inference_batch_size,
+              embedding_decoder,
+              decoder_cell,
+              decoder_initial_state,
+              projection_layer,
+              maximum_iterations = max_token_length):
+    """
+    :param target_token_index:
+    :param batch_for_inference:
+    :param embedding_decoder:
+    :param decoder_cell:
+    :param decoder_initial_state:
+    :param projection_layer:
+    :param maximum_iterations:
+    :return: RETURNS A TENSOR THE CALLER USES FOR INFERENCE ON 1 BATCH
+    """
+    tgt_sos_id = target_token_index['**start**']  # 1
+    tgt_eos_id = target_token_index['**end**']  # 0
+
+    # Helper
+    inference_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(embedding_decoder,
+        tf.fill([inference_batch_size], tgt_sos_id), tgt_eos_id)
+
+    # Decoder
+    inference_decoder = tf.contrib.seq2seq.BasicDecoder(
+        decoder_cell, inference_helper, decoder_initial_state,
+        output_layer=projection_layer)
+    # Dynamic decoding
+    outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+        inference_decoder, maximum_iterations=maximum_iterations)
+    translations = outputs.sample_id
+    return translations
+
+
+def predict_batch(sess,
+                  batch,
+                  target_token_index,
+                  embedding_decoder,
+                  decoder_cell,
+                  decoder_initial_state,
+                  projection_layer,
+                  img,
+                  maximum_iterations=max_token_length):
+    #for b in batches:
+    batch_len = batch.shape[0]
+    translation_t = inference_tensor(target_token_index,
+              batch_len,
+              embedding_decoder,
+              decoder_cell,
+              decoder_initial_state,
+              projection_layer)
+    translation = sess.run(translation_t, feed_dict={img: batch})
+    return translation
+
+def initialize_variables(sess, restore, path):
+    tf_saver = tf.train.Saver()
+    if RESTORE_FROM_CHECKPOINT:
+        print('restoring')
+        tf_saver.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
+    else:
+        print('reinitializing')
+        sess.run(tf.global_variables_initializer())
+
 
 
 def main():
-    ## CONFIG:
-    num_epochs = 10
-    max_token_length = 50
-    mini_batch_size = 16
-    max_train_num_samples = 100000
-    max_val_num_samples = 1000
-    use_attention = True
-    use_encoding_average_as_initial_state = False
-    num_units = 512  # LSTM number of units
-    calculate_val_loss = False
 
-
-    RESTORE_FROM_CHECKPOINT = True
-    CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
 
     # Create the vocabulary
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
@@ -659,13 +737,7 @@ def main():
     global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate = t
 
     sess = tf.Session()
-    tf_saver = tf.train.Saver()
-    if RESTORE_FROM_CHECKPOINT:
-        print('restoring')
-        tf_saver.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
-    else:
-        print('reinitializing')
-        sess.run(tf.global_variables_initializer())
+    initialize_variables(sess, restore=True, path=CHECKPOINT_PATH + '/model_9.ckpt')
 
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
