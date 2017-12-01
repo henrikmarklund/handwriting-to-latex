@@ -1,7 +1,6 @@
 import numpy as np
 import pickle
 import os
-import pandas as pd
 import tensorflow as tf
 from tensorflow.python.layers import core as layers_core
 from matplotlib import pyplot as plt
@@ -20,24 +19,10 @@ import datetime
 data = '../data/'
 output = '../output/'
 
-
 ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
-
-## CONFIG:
-num_epochs = 10
-max_token_length = 50
-mini_batch_size = 16
-max_train_num_samples = 100000
-max_val_num_samples = 1000
-use_attention = True # I have not tried without attention so not sure if it breaks
-
-# TODO, WARNING: seems unused
-use_encoding_average_as_initial_state = True  #Only relevant when use_attention is True.
-num_units = 512 # LSTM number of units
-calculate_val_loss = False
 
 buckets_dict = {(40, 160): 0,
                 (40, 200): 1,
@@ -58,8 +43,6 @@ buckets_dict = {(40, 160): 0,
                 (160, 400): 16,
                 (200, 500): 17,
                 (800, 800): 18}
-
-
 
 # 2. Try runnin it on the GPU for 1 hour (I suggest having a cap of token length 50, but increase the num samples to a lot) (All in the Config up top). If you want to play with different learning rates, I've not created a config for this yet. Rather there is a function called: get_learning_rate that handles it all.
 # 3. My sense is that it is probably way to slow but by running it on a GPU we can get a sense of how slow it is, and how much faster it needs to become. Right now I've got no sense, I but I've started tracking it for a batch.
@@ -405,54 +388,9 @@ def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_trai
     return _set
 
 
-def main():
-    # Create the vocabulary
-    token_vocabulary = ["**end**", "**start**", "**unknown**"]
-
-    token_vocabulary.extend(get_vocabulary("train"))
-
-    target_tokens = token_vocabulary  # TODO: Refactor this. Currently duplicate naming
-
-    token_vocab_size = len(target_tokens)
-    # todo: document what was lifted from tutorials and what we wrote ourselves
-    target_token_index = dict(
-        [(token, i) for i, token in enumerate(target_tokens)])
-
-    reverse_target_token_index = dict(
-        (i, char) for char, i in target_token_index.items())
-    print("\n ======================= Loading Data =======================")
-    #new cell
-
-    train_dataset = get_data_somehow('train', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
-    val_dataset = get_data_somehow('val', True, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
-    
-    train_encoder_input_data_batches = train_dataset[0]
-    train_target_texts_batches = train_dataset[1]
-    train_sequence_lengths_batches = train_dataset[2]
-    train_decoder_input_data_batches = train_dataset[3]
-    train_decoder_target_data_batches = train_dataset[4]
-
-    val_encoder_input_data_batches = val_dataset[0]
-    val_target_texts_batches = val_dataset[1]
-    val_sequence_lengths_batches = val_dataset[2]
-    val_decoder_input_data_batches = val_dataset[3]
-    val_decoder_target_data_batches = val_dataset[4]
-    print("\n ======================= Data Loaded =======================")
-    
-    num_train_batches = len(train_target_texts_batches)
-    num_val_batches = len(val_target_texts_batches)
-    num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
-    num_val_samples = (num_val_batches - 1) * mini_batch_size + val_target_texts_batches[-1].shape[0]
-
-    #new cell
-    print("Num train batches: ", num_train_batches)
-    print("Num val batches: ", num_val_batches)
-
-    print("Num train samples: ", num_train_samples)
-    print("Num val samples: ", num_val_samples)
-
-    #Encoder
-    #One of Genthails's encoder implementations (from paper)
+def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state):
+    # Encoder
+    # One of Genthails's encoder implementations (from paper)
     img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
 
     img = tf.cast(img, tf.float32) / 255
@@ -645,18 +583,92 @@ def main():
     for param in params:
         to_summary = tf.summary.histogram(param.name + '/weight', param)
 
-    # config=tf.ConfigProto(log_device_placement=True) logs whether it runs on the gpus
-    #sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
-    sess = tf.Session()
-
+        # config=tf.ConfigProto(log_device_placement=True) logs whether it runs on the gpus
+        # sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
     merged = tf.summary.merge_all()
-    train_writer = tf.summary.FileWriter(output + 'summaries/train/',
-                                         sess.graph)
 
-    init = tf.global_variables_initializer()
-    saver = tf.train.Saver()
+    output_tensors = [merged, update_step, train_loss, optimizer, global_norm, gradient_norms,
+                                  global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate]
+    return output_tensors
 
-    sess.run(init)
+
+def main():
+    ## CONFIG:
+    num_epochs = 10
+    max_token_length = 50
+    mini_batch_size = 16
+    max_train_num_samples = 100000
+    max_val_num_samples = 1000
+    use_attention = True
+    use_encoding_average_as_initial_state = False
+    num_units = 512  # LSTM number of units
+    calculate_val_loss = False
+
+
+    RESTORE_FROM_CHECKPOINT = True
+    CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
+
+    # Create the vocabulary
+    token_vocabulary = ["**end**", "**start**", "**unknown**"]
+
+    token_vocabulary.extend(get_vocabulary("train"))
+
+    target_tokens = token_vocabulary  # TODO: Refactor this. Currently duplicate naming
+
+    token_vocab_size = len(target_tokens)
+    # todo: document what was lifted from tutorials and what we wrote ourselves
+    target_token_index = dict(
+        [(token, i) for i, token in enumerate(target_tokens)])
+
+    reverse_target_token_index = dict(
+        (i, char) for char, i in target_token_index.items())
+    print("\n ======================= Loading Data =======================")
+    #new cell
+
+    train_dataset = get_data_somehow('train', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    val_dataset = get_data_somehow('val', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    
+    train_encoder_input_data_batches = train_dataset[0]
+    train_target_texts_batches = train_dataset[1]
+    train_sequence_lengths_batches = train_dataset[2]
+    train_decoder_input_data_batches = train_dataset[3]
+    train_decoder_target_data_batches = train_dataset[4]
+
+    val_encoder_input_data_batches = val_dataset[0]
+    val_target_texts_batches = val_dataset[1]
+    val_sequence_lengths_batches = val_dataset[2]
+    val_decoder_input_data_batches = val_dataset[3]
+    val_decoder_target_data_batches = val_dataset[4]
+    print("\n ======================= Data Loaded =======================")
+    
+    num_train_batches = len(train_target_texts_batches)
+    num_val_batches = len(val_target_texts_batches)
+    num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
+    num_val_samples = (num_val_batches - 1) * mini_batch_size + val_target_texts_batches[-1].shape[0]
+
+    #new cell
+    print("Num train batches: ", num_train_batches)
+    print("Num val batches: ", num_val_batches)
+
+    print("Num train samples: ", num_train_samples)
+    print("Num val samples: ", num_val_samples)
+
+    t = create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state)
+
+    merged, update_step, train_loss, optimizer, global_norm, gradient_norms, \
+    global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate = t
+
+    sess = tf.Session()
+    tf_saver = tf.train.Saver()
+    if RESTORE_FROM_CHECKPOINT:
+        print('restoring')
+        tf_saver.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
+    else:
+        print('reinitializing')
+        sess.run(tf.global_variables_initializer())
+
+
+    train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
 
     print("Num batches: ", len(
         train_sequence_lengths_batches))  # (Note: they are not necessarily equal size towards the end (this will fix later))
@@ -710,14 +722,9 @@ def main():
 
     glob_step = sess.run(
         global_step)  # Get what global step we are at in training already (so that the learning_rate is set correct)
-
-    gogo_gadget_saver = tf.train.Saver()
-
-    log = pd.DataFrame([['step', 'epoch', 'i', 'loss', 'time', 'norm']])
-
     #_list = get_id_for_bucket(train_encoder_input_data_batches)
 
-    for epoch in range(num_epochs):
+    for epoch in range(num_epochs + 1):
         print("Epoch: ", epoch)
 
         for i in range(num_train_batches):
@@ -738,17 +745,13 @@ def main():
                           }
 
             output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
+
             _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
                                                                          feed_dict=input_data)
 
-
-            end_time = datetime.datetime.now()
-            delta = end_time - start_time
-            # print("Time for batch in seconds: %.1f" % delta.total_seconds())
-            stats = [glob_step, epoch, i, loss, delta, global_grad_norm]
-
-            log.append(stats)
-
+            if i == 0:
+                print("loss:", loss)
+                print("glob step", glob_step)
             # Write to tensorboard
             if glob_step % 200 == 0:
                 _s = datetime.datetime.now()
@@ -756,23 +759,17 @@ def main():
                 for x, y in pair:
                     print(x,y)
 
-                if not os.path.exists(output + 'pickles'):
-                    os.makedirs(output + 'pickles')
-
-                log.to_csv(output + 'pickles/robin-thicke-logs-a-big.csv', mode='w+')
-
                 output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
                                   global_step]
                 summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
-                save_path = gogo_gadget_saver.save(sess, output + 'checkpoints/inner.ckpt')
                 _e = datetime.datetime.now()
                 print("Model saved in file: %s" % save_path)
                 print("checkpoint cost: ", _e - _s)
 
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
-        save_path = gogo_gadget_saver.save(sess, output + 'checkpoints/model_'+str(epoch)+'.ckpt')
+        save_path = tf_saver.save(sess, output + 'checkpoints/model_'+str(epoch)+'.ckpt')
         print("Model saved in file: %s" % save_path)
         if calculate_val_loss:
             val_loss = get_validation_loss(num_val_batches,
