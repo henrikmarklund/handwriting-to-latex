@@ -6,34 +6,45 @@ from tensorflow.python.layers import core as layers_core
 from matplotlib import pyplot as plt
 import cv2
 import datetime
+import json
 
 ### Outline
 
-# 1. Encoder
-# 2. Decoder
-# 3. Optimization and training
-
-# 4. Inference
 
 ## CONFIG:
-num_epochs = 10
-max_token_length = 50
-mini_batch_size = 16
-max_train_num_samples = 100000
-max_val_num_samples = 1000
-use_attention = True
-use_encoding_average_as_initial_state = False
-num_units = 512  # LSTM number of units
+hparams = {}
+hparams['num_epochs'] = 16
+hparams['max_token_length'] = 50
+hparams['mini_batch_size'] = 16
+hparams['max_train_num_samples'] = 100000
+hparams['max_val_num_samples'] = 100000
+hparams['use_attention'] = True
+hparams['use_encoding_average_as_initial_state'] = False
+hparams['num_units'] = 512  # LSTM number of units
+hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
+
+# Learning rate config
+hparams['warm_up_rate'] = 0.0001
+hparams['num_epochs_warm_up'] = 3
+hparams['base_learning_rate'] = 0.0004
+hparams['num_epochs_constant_lrate'] = 3
+hparams['num_decay_epochs'] = 10
+hparams['target_rate'] = 0.00001
 calculate_val_loss = False
-RESTORE_FROM_CHECKPOINT = True
+
+
+
+RESTORE_FROM_CHECKPOINT = False
 CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
 max_token_length = 50
+
+OVERFIT_TO_SMALL_SAMPLE = True
 
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
 
-ON_FLOYDHUB = False
+ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -310,22 +321,51 @@ def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, 
 def get_learning_rate(global_step, num_train_batches):
     epoch = int(float(global_step) / num_train_batches)
 
-    base_learning_rate = 0.0005
+    base_learning_rate = 0.0002
 
-    if epoch < 3:
-        # Warm up
-        lr_rate = 0.0001
-    elif epoch < 6:
-        lr_rate = 0.0005
-    elif epoch < 16:
-        # Over 10 epochs decay learning rate from 0.0005 to 0.00001
 
-        decay_rate = 0.00001 / 0.0005
-        decay_steps = num_train_batches * 10
-        lr_rate = base_learning_rate * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
+    if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
+
+        if epoch < 3:
+            # Warm up
+            lr_rate = 0.0001
+        elif epoch < 6:
+            lr_rate = 0.0004
+        elif epoch < 200:
+            # Over 10 epochs decay learning rate from 0.0005 to 0.00001
+            decay_rate = 0.00001 / 0.0004
+            decay_steps = num_train_batches * 10
+            lr_rate = base_learning_rate * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
+        else:
+            # after 16 epochs of decay, set a new fixed rate
+            lr_rate = 0.00001
     else:
-        # after 16 epochs of decay, set a new fixed rate
-        lr_rate = 0.00001
+
+
+        warm_up_rate = hparams['warm_up_rate']
+        num_epochs_warm_up = hparams['num_epochs_warm_up']
+
+        base_learning_rate = hparams['base_learning_rate']
+        num_epochs_constant_lrate = hparams['num_epochs_constant_lrate']
+
+        num_decay_epochs = hparams['num_decay_epochs']
+        target_rate = hparams['target_rate']
+
+        if epoch < num_epochs_warm_up:
+            # Warm up
+            lr_rate = warm_up_rate
+        elif epoch < num_epochs_warm_up + num_epochs_constant_lrate:
+            lr_rate = base_learning_rate
+        elif epoch < num_epochs_warm_up + num_epochs_constant_lrate + num_decay_epochs:
+            # Over 10 epochs decay learning rate from 0.0005 to 0.00001
+
+            decay_rate = target_rate / base_learning_rate
+            decay_steps = num_train_batches * num_decay_epochs
+            lr_rate = base_learning_rate * decay_rate ** (float((global_step - num_train_batches * num_epochs_warm_up + num_epochs_constant_lrate)) / decay_steps)
+        else:
+            
+            lr_rate = target_rate
+
     return lr_rate
 
 
@@ -400,6 +440,32 @@ def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_trai
         _set = load_data_pickle(name)
 
     return _set
+
+def get_loss(img, encoder_input_data_batches,
+                        decoder_lengths, sequence_lengths_batches,
+                        decoder_inputs, decoder_input_data_batches,
+                        decoder_outputs, decoder_target_data_batches,
+                        train_loss, sess):
+    
+    
+    num_batches = len(sequence_lengths_batches)
+    avg_loss = 0
+    for i in range(num_batches):
+        input_data = {img: encoder_input_data_batches[i],
+                      decoder_lengths: sequence_lengths_batches[i],
+                      decoder_inputs: decoder_input_data_batches[i],
+                      decoder_outputs: decoder_target_data_batches[i],
+                      }
+
+        output_tensors = [train_loss]
+        loss = sess.run(output_tensors,
+                        feed_dict=input_data)
+
+        
+        avg_loss = avg_loss + loss[0]
+
+    avg_loss = avg_loss / num_batches
+    return avg_loss
 
 
 def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
@@ -485,8 +551,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
 
     # Embedding matrix
     embedding_decoder = tf.get_variable(
-        "embedding_encoder", [token_vocab_size, embedding_size], tf.float32,
-        initializer=tf.orthogonal_initializer)  # tf.float32 was default in the NMT tutorial
+        "embedding_encoder", [token_vocab_size, embedding_size], tf.float32)  # tf.float32 was default in the NMT tutorial
 
     # Look up embedding:
     #   decoder_inputs: [max_time, batch_size]
@@ -673,18 +738,49 @@ def predict_batch(sess,
     return translation
 
 def initialize_variables(sess, restore, path):
-    tf_saver = tf.train.Saver()
+    
     if RESTORE_FROM_CHECKPOINT:
         print('restoring')
-        tf_saver.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
+        tf_loader = tf.train.Saver()
+        tf_loader.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
     else:
         print('reinitializing')
         sess.run(tf.global_variables_initializer())
 
 
+def create_hparams_log():
+
+
+
+    file = open(output + "hparams.txt","w") 
+    file.write(json.dumps(hparams, indent=4))
+
+    file.close()
+
+def create_metric_output_files():
+
+    file = open(output + "metrics.txt","w") 
+ 
+
+
+    file.write("Train loss" + "\t" + "Val loss" + "\t" + "Learning rate" + "\n")
+
+    file.close()
+
+
 
 def main():
+    create_hparams_log()
 
+
+    num_epochs = hparams['num_epochs']
+    max_token_length = hparams['max_token_length']
+    mini_batch_size = hparams['mini_batch_size']
+    max_train_num_samples = hparams['max_train_num_samples']
+    max_val_num_samples = hparams['max_val_num_samples']
+    use_attention = hparams['use_attention']
+    use_encoding_average_as_initial_state = hparams['use_encoding_average_as_initial_state']
+    num_units = hparams['num_units']  # LSTM number of units
 
     # Create the vocabulary
     token_vocabulary = ["**end**", "**start**", "**unknown**"]
@@ -703,8 +799,8 @@ def main():
     print("\n ======================= Loading Data =======================")
     #new cell
 
-    train_dataset = get_data_somehow('train', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
-    val_dataset = get_data_somehow('val', False, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    train_dataset = get_data_somehow('train', True, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    val_dataset = get_data_somehow('val', True, mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
     
     train_encoder_input_data_batches = train_dataset[0]
     train_target_texts_batches = train_dataset[1]
@@ -736,7 +832,9 @@ def main():
     merged, update_step, train_loss, optimizer, global_norm, gradient_norms, \
     global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate = t
 
+    
     sess = tf.Session()
+    tf_saver = tf.train.Saver()
     initialize_variables(sess, restore=True, path=CHECKPOINT_PATH + '/model_9.ckpt')
 
 
@@ -789,12 +887,14 @@ def main():
 
     print("Total number of parameters: ", total_parameters)
 
-    val_losses = []
     print("Num batches: ", num_train_batches)
 
     glob_step = sess.run(
         global_step)  # Get what global step we are at in training already (so that the learning_rate is set correct)
     #_list = get_id_for_bucket(train_encoder_input_data_batches)
+
+
+    create_metric_output_files()
 
     for epoch in range(num_epochs + 1):
         print("Epoch: ", epoch)
@@ -802,12 +902,16 @@ def main():
         for i in range(num_train_batches):
         #for i in _list:
 
+
+
             # Calculate running time for batch
             start_time = datetime.datetime.now()
 
             # Calculate the right learning rate for this step.
 
             lrate = get_learning_rate(glob_step, num_train_batches)
+
+            
 
             input_data = {img: train_encoder_input_data_batches[i],
                           decoder_lengths: train_sequence_lengths_batches[i],
@@ -826,10 +930,7 @@ def main():
                 print("glob step", glob_step)
             # Write to tensorboard
             if glob_step % 200 == 0:
-                _s = datetime.datetime.now()
-                pair = zip(log[0], stats)
-                for x, y in pair:
-                    print(x,y)
+
 
                 output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
                                   global_step]
@@ -837,12 +938,37 @@ def main():
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
                 _e = datetime.datetime.now()
-                print("Model saved in file: %s" % save_path)
-                print("checkpoint cost: ", _e - _s)
+                
 
+            if i == 0:
+                validation_loss = get_loss(img, val_encoder_input_data_batches,
+                        decoder_lengths, val_sequence_lengths_batches,
+                        decoder_inputs, val_decoder_input_data_batches,
+                        decoder_outputs, val_decoder_target_data_batches,
+                        train_loss, sess)  
+
+                training_loss = get_loss(img, train_encoder_input_data_batches,
+                        decoder_lengths, train_sequence_lengths_batches,
+                        decoder_inputs, train_decoder_input_data_batches,
+                        decoder_outputs, train_decoder_target_data_batches,
+                        train_loss, sess) 
+
+                file = open(output + "metrics.txt","a") 
+                lrate_to_file = ('%s' % ('%.8g' % lrate))
+                file.write(str(training_loss) + "\t" + str(validation_loss) + "\t" + lrate_to_file + "\n")
+
+                file.close()
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
+        
+        
+        
         save_path = tf_saver.save(sess, output + 'checkpoints/model_'+str(epoch)+'.ckpt')
         print("Model saved in file: %s" % save_path)
+        
+        
+
+
+
         if calculate_val_loss:
             val_loss = get_validation_loss(num_val_batches,
                                            img, val_encoder_input_data_batches,
@@ -856,6 +982,8 @@ def main():
                 f.write(repr(val_losses))
                 # todo: get some notion of training set performance each time.
 
+
+        
 
 if __name__ == '__main__':
     main()
