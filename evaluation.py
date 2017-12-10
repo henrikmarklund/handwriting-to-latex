@@ -89,6 +89,12 @@ def get_metrics(labels_batches, predictions_batches):
 
   return exact_match_avg, token_accuracy_avg, edit_distance_avg
 
+
+
+
+
+
+
 # TEST
 #predictions_batch1 = [[3,4,5], [6,1,6], [1,4], [51,5,6], [6,61,616,4] ]
 #labels_batch1 = [[3,2,5], [6,1,6], [1,4], [6,61,616,4], [51,5,6]]

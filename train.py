@@ -13,15 +13,15 @@ import json
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 16
-hparams['max_token_length'] = 50
+hparams['num_epochs'] = 1500
+hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
-hparams['max_train_num_samples'] = 100000
-hparams['max_val_num_samples'] = 100000
+hparams['max_train_num_samples'] = 10
+hparams['max_val_num_samples'] = 10
 hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 512  # LSTM number of units
-hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
+hparams['OVERFIT_TO_SMALL_SAMPLE'] = True
 
 # Learning rate config
 hparams['warm_up_rate'] = 0.0001
@@ -38,13 +38,13 @@ RESTORE_FROM_CHECKPOINT = False
 CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
 max_token_length = 50
 
-OVERFIT_TO_SMALL_SAMPLE = True
+OVERFIT_TO_SMALL_SAMPLE = False
 
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
 
-ON_FLOYDHUB = True
+ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -321,21 +321,20 @@ def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, 
 def get_learning_rate(global_step, num_train_batches):
     epoch = int(float(global_step) / num_train_batches)
 
-    base_learning_rate = 0.0002
 
 
     if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
 
-        if epoch < 3:
+        if epoch < 20:
             # Warm up
             lr_rate = 0.0001
-        elif epoch < 6:
-            lr_rate = 0.0004
-        elif epoch < 200:
+        elif epoch < 40:
+            lr_rate = 0.0005
+        elif epoch < 500:
             # Over 10 epochs decay learning rate from 0.0005 to 0.00001
-            decay_rate = 0.00001 / 0.0004
-            decay_steps = num_train_batches * 10
-            lr_rate = base_learning_rate * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
+            decay_rate = 0.00001 / 0.0005
+            decay_steps = hparams['num_epochs']
+            lr_rate =  0.0005 * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
         else:
             # after 16 epochs of decay, set a new fixed rate
             lr_rate = 0.00001
@@ -483,7 +482,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu)
 
     out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)  # regular conv -> id
-    out = tf.layers.batch_normalization(out)
+    #out = tf.layers.batch_normalization(out)
 
     out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)  # regular conv -> id
     out = tf.layers.max_pooling2d(out, (2, 1), (2, 1), "SAME")
@@ -493,7 +492,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
 
     # Conv valid
     out = tf.layers.conv2d(out, 512, 3, 1, "VALID", activation=tf.nn.relu, name="last_conv_layer")  # conv
-    out = tf.layers.batch_normalization(out)
+    #out = tf.layers.batch_normalization(out)
 
     ## Out is now a H'*W' encoding of the image
 
@@ -520,7 +519,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     if use_encoding_average_as_initial_state:
         img_mean = tf.reduce_mean(seq, axis=1)
 
-        img_mean = tf.layers.batch_normalization(img_mean)
+        #img_mean = tf.layers.batch_normalization(img_mean)
 
         W = tf.get_variable("W", shape=[512, num_units])
         b = tf.get_variable("b", shape=[num_units])
@@ -560,14 +559,14 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         embedding_decoder, decoder_inputs)
 
     # Build RNN cell
-    # decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
+    decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
 
 
     # Using this instead compared to NMT tutorial so we can initialize with orthogonal intializer (like Genthail)
-    decoder_cell = tf.nn.rnn_cell.LSTMCell(
-        num_units,
-        initializer=tf.orthogonal_initializer,
-    )
+    #decoder_cell = tf.nn.rnn_cell.LSTMCell(
+        #num_units,
+        #initializer=tf.orthogonal_initializer,
+    #)
 
     if use_attention:
         decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
@@ -714,7 +713,9 @@ def inference_tensor(target_token_index,
     outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
         inference_decoder, maximum_iterations=maximum_iterations)
     translations = outputs.sample_id
-    return translations
+    logits = outputs.rnn_output
+    return translations,logits
+
 
 
 def predict_batch(sess,
@@ -728,14 +729,14 @@ def predict_batch(sess,
                   maximum_iterations=max_token_length):
     #for b in batches:
     batch_len = batch.shape[0]
-    translation_t = inference_tensor(target_token_index,
+    translation_t, logits_t = inference_tensor(target_token_index,
               batch_len,
               embedding_decoder,
               decoder_cell,
               decoder_initial_state,
               projection_layer)
-    translation = sess.run(translation_t, feed_dict={img: batch})
-    return translation
+    translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
+    return translation,logits
 
 def initialize_variables(sess, restore, path):
     
@@ -763,7 +764,7 @@ def create_metric_output_files():
  
 
 
-    file.write("Train loss" + "\t" + "Val loss" + "\t" + "Learning rate" + "\n")
+    file.write("Train loss" + "\t" + "Val loss" + "\t" + "Learning rate" + "\t" + "Global grad norm" + "\n")
 
     file.close()
 
@@ -900,7 +901,7 @@ def main():
         print("Epoch: ", epoch)
 
         for i in range(num_train_batches):
-        #for i in _list:
+        
 
 
 
@@ -919,15 +920,6 @@ def main():
                           decoder_outputs: train_decoder_target_data_batches[i],
                           learning_rate: lrate
                           }
-
-            output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
-
-            _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
-                                                                         feed_dict=input_data)
-
-            if i == 0:
-                print("loss:", loss)
-                print("glob step", glob_step)
             # Write to tensorboard
             if glob_step % 200 == 0:
 
@@ -937,8 +929,19 @@ def main():
                 summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
-                _e = datetime.datetime.now()
                 
+            else:
+                
+
+                output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
+
+                _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
+                                                                         feed_dict=input_data)
+                
+
+            if i == 0:
+                print("loss:", loss)
+                print("glob step", glob_step)
 
             if i == 0:
                 validation_loss = get_loss(img, val_encoder_input_data_batches,
@@ -955,7 +958,7 @@ def main():
 
                 file = open(output + "metrics.txt","a") 
                 lrate_to_file = ('%s' % ('%.8g' % lrate))
-                file.write(str(training_loss) + "\t" + str(validation_loss) + "\t" + lrate_to_file + "\n")
+                file.write(str(training_loss) + "\t" + str(validation_loss) + "\t" + lrate_to_file + "\t" + str(global_grad_norm)+ "\n")
 
                 file.close()
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
@@ -967,20 +970,6 @@ def main():
         
         
 
-
-
-        if calculate_val_loss:
-            val_loss = get_validation_loss(num_val_batches,
-                                           img, val_encoder_input_data_batches,
-                                           decoder_lengths, val_sequence_lengths_batches,
-                                           decoder_inputs, val_decoder_input_data_batches,
-                                           decoder_outputs, val_decoder_target_data_batches)
-            val_losses.append(val_loss)
-
-            print("Val loss: ", val_loss)
-            with open(output + 'validation-loss.txt', 'w') as f:
-                f.write(repr(val_losses))
-                # todo: get some notion of training set performance each time.
 
 
         
