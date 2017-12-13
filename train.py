@@ -17,7 +17,7 @@ from tensor2tensor.layers.common_attention import add_timing_signal_nd
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 16
+hparams['num_epochs'] = 2
 hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
 hparams['max_train_num_samples'] = 16
