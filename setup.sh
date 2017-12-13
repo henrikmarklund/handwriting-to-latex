@@ -39,3 +39,5 @@ ls /usr/local/cuda/include/ | grep "libcudn*"
 
 pip3 install cudnn-python-wrappers
 pip3 install tf-nightly-gpu
+pip3 install tensor2tensor
+pip3 install distance

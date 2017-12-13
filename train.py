@@ -10,6 +10,7 @@ import json
 import pdb
 from operator import itemgetter
 from random import shuffle
+import tensor2tensor
 
 ### Outline
 
@@ -24,7 +25,7 @@ hparams['max_val_num_samples'] = 10000
 hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 256  # LSTM number of units
-hparams['OVERFIT_TO_SMALL_SAMPLE'] = True
+hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
 
 # Learning rate config
 hparams['warm_up_rate'] = 0.00005
@@ -35,7 +36,7 @@ hparams['num_decay_epochs'] = 30
 hparams['target_rate'] = 0.000005
 calculate_val_loss = True
 
-RESTORE_FROM_CHECKPOINT = False
+RESTORE_FROM_CHECKPOINT = True
 # whether or not to create the 'dataset' structure freshly from the image files or from a cached pickle
 # todo change back to True
 LOAD_FRESHLY = False
@@ -46,7 +47,8 @@ CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-e
 data = '../scratch-pickle/'
 output = '../output/'
 
-ON_FLOYDHUB = True
+#todo turn off before uploading
+ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -472,9 +474,11 @@ def load_data_pickle(name):
 
 def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index):
     if (fresh):
+        print('fresh data coming up')
         _set = load_data(name, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index)
         dump_data_set(_set, name)
     else:
+        print('yesterday\'s data half price')
         _set = load_data_pickle(name)
 
     return _set
@@ -562,7 +566,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     H = tf.shape(out)[1]
     W = tf.shape(out)[2]
 
-    # out = add_timing_signal_nd(out)
+    out = tensor2tensor.layers.add_timing_signal(out)
     seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
 
     # First state of the decoder consists of two vectors, the hidden state (h0) and the memory (c0).
@@ -794,10 +798,10 @@ def predict_batch(sess,
 
 
 def initialize_variables(sess, restore, path):
-    if RESTORE_FROM_CHECKPOINT:
+    if restore:
         print('restoring')
         tf_loader = tf.train.Saver()
-        tf_loader.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
+        tf_loader.restore(sess, path)
     else:
         print('reinitializing')
         sess.run(tf.global_variables_initializer())
@@ -846,7 +850,7 @@ def main():
         (i, char) for char, i in target_token_index.items())
     print("\n ======================= Loading Data =======================")
     # new cell
-
+    print('load freshly: ', LOAD_FRESHLY)
     train_dataset = get_data_somehow('train(40, 160, 1)', LOAD_FRESHLY, mini_batch_size, max_token_length,
                                      max_train_num_samples,
                                      target_token_index)
@@ -896,7 +900,7 @@ def main():
 
     sess = tf.Session()
     tf_saver = tf.train.Saver()
-    initialize_variables(sess, restore=True, path=CHECKPOINT_PATH + '/model_9.ckpt')
+    initialize_variables(sess, restore=RESTORE_FROM_CHECKPOINT, path="/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints/model_47.ckpt")
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
 
@@ -957,8 +961,8 @@ def main():
 
     if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
         #only train on the first 2 batches
-        print('only training on the first 2 batches')
-        num_train_batches = 2
+        print('only training on the first 1 batches')
+        num_train_batches = 1
 
     for epoch in range(num_epochs + 1):
         print("planning: %d epochs.  Starting epoch: %d" % (num_epochs, epoch))
@@ -975,7 +979,6 @@ def main():
         #    train_decoder_target_data_batches = train_decoder_target_data_batches[idxs]
 
         for i in range(num_train_batches):
-
             # Calculate running time for batch
             start_time = datetime.datetime.now()
 
