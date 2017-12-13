@@ -10,44 +10,42 @@ import json
 import pdb
 from operator import itemgetter
 from random import shuffle
-import tensor2tensor
+from tensor2tensor.layers.common_attention import add_timing_signal_nd
 
 ### Outline
 
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 1000
+hparams['num_epochs'] = 16
 hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
-hparams['max_train_num_samples'] = 1000000000
-hparams['max_val_num_samples'] = 10000
+hparams['max_train_num_samples'] = 16
+hparams['max_val_num_samples'] = 16
 hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
-hparams['num_units'] = 256  # LSTM number of units
+hparams['num_units'] = 512  # LSTM number of units
 hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
 
 # Learning rate config
-hparams['warm_up_rate'] = 0.00005
-hparams['num_epochs_warm_up'] = 5
-hparams['base_learning_rate'] = 0.0003
-hparams['num_epochs_constant_lrate'] = 5
+hparams['warm_up_rate'] = 0.00001
+hparams['num_epochs_warm_up'] = 3
+hparams['base_learning_rate'] = 0.0004
+hparams['num_epochs_constant_lrate'] = 3
 hparams['num_decay_epochs'] = 30
-hparams['target_rate'] = 0.000005
+hparams['target_rate'] = 0.00001
 calculate_val_loss = True
 
-RESTORE_FROM_CHECKPOINT = True
+RESTORE_FROM_CHECKPOINT = False
 # whether or not to create the 'dataset' structure freshly from the image files or from a cached pickle
-# todo change back to True
-LOAD_FRESHLY = False
-CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
+LOAD_FRESHLY = True
 
 ## FLOYDHUB CONFIG
 #data = '../data/'
-data = '../scratch-pickle/'
+data = '../data/'
 output = '../output/'
 
-#todo turn off before uploading
+#todo change these three back before cloud run
 ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
@@ -251,6 +249,7 @@ def split_dataset(dataset):
 
 
 def get_vocabulary(dataset):
+    print("HI MOM! ", data)
     if dataset == "small":
         vocab = [line for line in open(data + 'tin/tiny_vocab.txt')]
     elif dataset == "test":
@@ -344,7 +343,7 @@ def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, 
     dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
                             max_num_samples=max_num_samples)
 
-    dataset.sort(key=sort_key)
+    #dataset.sort(key=sort_key)
     encoder_input_data_batches, target_texts_batches, sequence_lengths_batches = split_dataset(dataset)
     decoder_input_data_batches, decoder_target_data_batches = create_output_int_sequences(target_texts_batches,
                                                                                           sequence_lengths_batches,
@@ -539,18 +538,18 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
 
     cast_img = tf.cast(img, tf.float32) / 255.
 
-    out = tf.layers.conv2d(cast_img, 64, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(cast_img, 64, 3, 1, "SAME", activation=tf.nn.relu, name='conv1')
     out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
 
-    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu)
-    skip = tf.layers.max_pooling2d(out, 2, 2, "SAME")
+    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu, name='conv2')
+    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
 
-    out = tf.layers.conv2d(skip, 128, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu, name='conv3')
 
-    out = tf.layers.conv2d(out + skip, 256, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu, name='conv4')
     out = tf.layers.max_pooling2d(out, (2, 1), (2, 1), "SAME")
 
-    out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu, name='conv5')
     out = tf.layers.max_pooling2d(out, (1, 2), (1, 2), "SAME")
 
     # encoder representation, shape = (batch size, height', width', 512)
@@ -566,7 +565,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     H = tf.shape(out)[1]
     W = tf.shape(out)[2]
 
-    out = tensor2tensor.layers.add_timing_signal(out)
+    out = add_timing_signal_nd(out)
     seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
 
     # First state of the decoder consists of two vectors, the hidden state (h0) and the memory (c0).
@@ -797,11 +796,10 @@ def predict_batch(sess,
     return translation, logits
 
 
-def initialize_variables(sess, restore, path):
+def initialize_variables(sess, saver, restore, path):
     if restore:
         print('restoring')
-        tf_loader = tf.train.Saver()
-        tf_loader.restore(sess, path)
+        saver.restore(sess, path)
     else:
         print('reinitializing')
         sess.run(tf.global_variables_initializer())
@@ -835,14 +833,10 @@ def main():
     num_units = hparams['num_units']  # LSTM number of units
 
     # Create the vocabulary
-    token_vocabulary = ["**end**", "**start**", "**unknown**"]
+    target_tokens = ["**end**", "**start**", "**unknown**"]
 
-    token_vocabulary.extend(get_vocabulary("train"))
-
-    target_tokens = token_vocabulary  # TODO: Refactor this. Currently duplicate naming
-
+    target_tokens.extend(get_vocabulary("train"))
     token_vocab_size = len(target_tokens)
-    # todo: document what was lifted from tutorials and what we wrote ourselves
     target_token_index = dict(
         [(token, i) for i, token in enumerate(target_tokens)])
 
@@ -851,10 +845,10 @@ def main():
     print("\n ======================= Loading Data =======================")
     # new cell
     print('load freshly: ', LOAD_FRESHLY)
-    train_dataset = get_data_somehow('train(40, 160, 1)', LOAD_FRESHLY, mini_batch_size, max_token_length,
+    train_dataset = get_data_somehow('train', LOAD_FRESHLY, mini_batch_size, max_token_length,
                                      max_train_num_samples,
                                      target_token_index)
-    val_dataset = get_data_somehow('val(40, 160, 1)', LOAD_FRESHLY, mini_batch_size, max_token_length,
+    val_dataset = get_data_somehow('val', LOAD_FRESHLY, mini_batch_size, max_token_length,
                                    max_val_num_samples,
                                    target_token_index)
 
@@ -899,8 +893,8 @@ def main():
     learning_rate = g['learning_rate']
 
     sess = tf.Session()
-    tf_saver = tf.train.Saver()
-    initialize_variables(sess, restore=RESTORE_FROM_CHECKPOINT, path="/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints/model_47.ckpt")
+    tf_saver = tf.train.Saver(name='Henrik', allow_empty=False)
+    initialize_variables(sess, saver=tf_saver, restore=RESTORE_FROM_CHECKPOINT, path="/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints/model_9.ckpt")
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
 
@@ -927,12 +921,6 @@ def main():
     for step in range(num_train_batches * 20):
         learning_rates.append(get_learning_rate(step, num_train_batches))
 
-    # plt.title('Learning rate (10^) over the steps')
-    # plt.ylabel('learning rate (10 ^)')
-    # plt.xlabel('steps #')
-    # plt.plot(np.log10(learning_rates))
-    # plt.savefig(output + 'learning_rate.png')
-    # plt.close()
 
     total_parameters = 0
     # Get total number of parameters
@@ -967,16 +955,17 @@ def main():
     for epoch in range(num_epochs + 1):
         print("planning: %d epochs.  Starting epoch: %d" % (num_epochs, epoch))
 
-        # Train on data sorted by image_width for the first 20 epochs, and random orderings after that
-        # if epoch > -1:
-        #    idxs = range(len(train_encoder_input_data_batches))
+        # Train on data sorted by image_width for the first 15 epochs, and random orderings after that
+        #if epoch > 10:
+        #    print('shuffled')
+        #    idxs = [x for x in range(len(train_encoder_input_data_batches))]
         #    shuffle(idxs)
 
-        #    train_encoder_input_data_batches = train_encoder_input_data_batches[idxs]
-        #    train_target_texts_batches = train_target_texts_batches[idxs]
-        #    train_sequence_lengths_batches = train_sequence_lengths_batches[idxs]
-        #    train_decoder_input_data_batches = train_decoder_input_data_batches[idxs]
-        #    train_decoder_target_data_batches = train_decoder_target_data_batches[idxs]
+        #    train_encoder_input_data_batches = itemgetter(*idxs)(train_encoder_input_data_batches)
+        #    train_target_texts_batches = itemgetter(*idxs)(train_target_texts_batches)
+        #    train_sequence_lengths_batches = itemgetter(*idxs)(train_sequence_lengths_batches)
+        #    train_decoder_input_data_batches = itemgetter(*idxs)(train_decoder_input_data_batches)
+        #    train_decoder_target_data_batches = itemgetter(*idxs)(train_decoder_target_data_batches)
 
         for i in range(num_train_batches):
             # Calculate running time for batch
@@ -1031,7 +1020,7 @@ def main():
                 file.close()
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
 
-        save_path = tf_saver.save(sess, output + 'checkpoints/model_' + str(epoch) + '.ckpt')
+        save_path = tf_saver.save(sess, output + 'checkpoints/model_a_' + str(epoch) + '.ckpt', global_step=glob_step)
         print("Model saved in file: %s" % save_path)
 
 
