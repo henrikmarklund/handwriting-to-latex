@@ -508,37 +508,7 @@ def get_loss(img, encoder_input_data_batches,
 
 
 def std_ocr_convnet(img):
-    img = tf.cast(img, tf.float32) / 255.
-
-    out = tf.layers.conv2d(img, 64, 3, 1, "SAME", activation=tf.nn.relu)
-    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
-
-    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu)
-    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
-
-    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)
-
-    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)
-    out = tf.layers.max_pooling2d(out, (2, 1), (2, 1), "SAME")
-
-    out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu)
-    out = tf.layers.max_pooling2d(out, (1, 2), (1, 2), "SAME")
-
-    # encoder representation, shape = (batch size, height', width', 512)
-    out = tf.layers.conv2d(out, 512, 3, 1, "VALID", activation=tf.nn.relu)
-
-    return out
-
-
-def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
-    # Encoder
-    # Adam Added skip connection to one of Genthails's encoder implementations (from paper)
-    img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
-    batch_size = tf.shape(img)[0]
-
-    cast_img = tf.cast(img, tf.float32) / 255.
-
-    out = tf.layers.conv2d(cast_img, 64, 3, 1, "SAME", activation=tf.nn.relu, name='conv1')
+    out = tf.layers.conv2d(img, 64, 3, 1, "SAME", activation=tf.nn.relu, name='conv1')
     out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
 
     out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu, name='conv2')
@@ -561,12 +531,105 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     # H= out.shape[1]
     # W= out.shape[2]
     # C= out.shape[3]
-
     H = tf.shape(out)[1]
     W = tf.shape(out)[2]
 
     out = add_timing_signal_nd(out)
     seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
+
+    return seq
+
+
+def dense_net(cast_img, _depth, _growth_rate):
+
+    def conv(name, l, channel, stride):
+        return tf.layers.conv2d(l, channel,
+                                kernel_size=3,
+                                strides=stride,
+                                padding="SAME",
+                                name=name,
+                                activation=None,
+                                use_bias=False,
+                                kernel_regularizer=None,
+                                kernel_initializer=tf.random_normal_initializer(stddev=np.sqrt(2.0 / 9 / channel)))
+
+    def add_layer(name, l, growth_rate):
+        shape = l.get_shape().as_list()
+        in_channel = shape[3]
+        with tf.variable_scope(name) as scope:
+            c = tf.layers.batch_normalization(l, name='bn1')
+            c = tf.nn.relu(c)
+            c = conv('conv1', c, growth_rate, 1)
+            l = tf.concat([c, l], 3)
+        return l
+
+    def add_transition(name, l):
+        shape = l.get_shape().as_list()
+        in_channel = shape[3]
+        with tf.variable_scope(name) as scope:
+            l = tf.layers.batch_normalization(l, name='bn1')
+            l = tf.nn.relu(l)
+            l = tf.layers.conv2d(l, in_channel, kernel_size=1, strides=1, use_bias=False, activation=tf.nn.relu, name='conv1')
+            l = tf.layers.average_pooling2d(l, pool_size=2, strides=2, name='pool')
+        return l
+
+    def dense_net(input, depth, growth_rate):
+        N = int((depth - 4) / 3)
+        l = conv('conv0', input, 16, 1)
+        with tf.variable_scope('block1') as scope:
+
+            for i in range(N):
+                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
+            l = add_transition('transition1', l)
+
+        with tf.variable_scope('block2') as scope:
+
+            for i in range(N):
+                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
+            l = add_transition('transition2', l)
+
+        with tf.variable_scope('block3') as scope:
+
+            for i in range(N):
+                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
+        l = tf.layers.batch_normalization(l, name='bnlast')
+        l = tf.nn.relu(l)
+        #l = GlobalAvgPooling('gap', l)
+
+        # I am undecided as to whether this global average pooling gives a useful result
+        # I don't really know what the shape is after and before this operation
+        # axis = [1, 2]
+        # l = tf.reduce_mean(l, axis, name='idk_global_average_pooling')
+        return l
+
+    out = dense_net(cast_img, _depth, _growth_rate)
+    print('out', out)
+    print('shape of ', tf.shape(out))
+    ## Out is now an encoding of the image.  I do not know the dimensions
+
+    ## We want to turn this into a sequence of vectors: (e1, e2 ... en)
+    # H= out.shape[1]
+    # W= out.shape[2]
+    # C= out.shape[3]
+    pdb.set_trace()
+    H = tf.shape(out)[0]
+    W = tf.shape(out)[1]
+
+    out = add_timing_signal_nd(out)
+    seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
+    return seq
+
+
+def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
+    # Encoder
+    # Adam Added skip connection to one of Genthails's encoder implementations (from paper)
+    img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
+    batch_size = tf.shape(img)[0]
+
+    cast_img = tf.cast(img, tf.float32) / 255.
+
+    #seq = dense_net(cast_img, _depth=35, _growth_rate=16)
+    seq = std_ocr_convnet(cast_img)
 
     # First state of the decoder consists of two vectors, the hidden state (h0) and the memory (c0).
     # Usually the hidden state refers to [h0, c0]. So a little bit of overloading of hidden state (I think)
@@ -593,6 +656,8 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     attention_depth = num_units
 
     # Create an attention mechanism
+    print('attention d', attention_depth)
+    print('attention_states', attention_states)
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
         attention_depth, attention_states, scale=True)  # Can try scale = False
 
