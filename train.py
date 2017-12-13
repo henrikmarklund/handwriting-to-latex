@@ -958,7 +958,7 @@ def main():
     learning_rate = g['learning_rate']
 
     sess = tf.Session()
-    tf_saver = tf.train.Saver(name='Henrik', allow_empty=False)
+    tf_saver = tf.train.Saver(allow_empty=False, max_to_keep=2, save_relative_paths=True)
     initialize_variables(sess, saver=tf_saver, restore=RESTORE_FROM_CHECKPOINT, path="/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints/model_9.ckpt")
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
