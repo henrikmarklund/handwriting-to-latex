@@ -16,7 +16,7 @@ from random import shuffle
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 50
+hparams['num_epochs'] = 1000
 hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
 hparams['max_train_num_samples'] = 1000000000
@@ -24,7 +24,7 @@ hparams['max_val_num_samples'] = 10000
 hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 256  # LSTM number of units
-hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
+hparams['OVERFIT_TO_SMALL_SAMPLE'] = True
 
 # Learning rate config
 hparams['warm_up_rate'] = 0.00005
@@ -42,10 +42,11 @@ LOAD_FRESHLY = False
 CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
 
 ## FLOYDHUB CONFIG
-data = '../data/'
+#data = '../data/'
+data = '../scratch-pickle/'
 output = '../output/'
 
-ON_FLOYDHUB = False
+ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -462,7 +463,7 @@ def dump_data_set(set, name):
 
 def load_data_pickle(name):
     print('loading: ', name)
-    filename = output + 'pickles/' + name + '.pkl'
+    filename = data + name + '.pkl'
     f = open(filename, 'rb')
     data_set = pickle.load(f)
     f.close()
@@ -528,21 +529,21 @@ def std_ocr_convnet(img):
 
 def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
     # Encoder
-    # One of Genthails's encoder implementations (from paper)
+    # Adam Added skip connection to one of Genthails's encoder implementations (from paper)
     img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
     batch_size = tf.shape(img)[0]
 
-    img = tf.cast(img, tf.float32) / 255.
+    cast_img = tf.cast(img, tf.float32) / 255.
 
-    out = tf.layers.conv2d(img, 64, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(cast_img, 64, 3, 1, "SAME", activation=tf.nn.relu)
     out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
 
     out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu)
-    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
+    skip = tf.layers.max_pooling2d(out, 2, 2, "SAME")
 
-    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(skip, 128, 3, 1, "SAME", activation=tf.nn.relu)
 
-    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)
+    out = tf.layers.conv2d(out + skip, 256, 3, 1, "SAME", activation=tf.nn.relu)
     out = tf.layers.max_pooling2d(out, (2, 1), (2, 1), "SAME")
 
     out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu)
@@ -954,8 +955,13 @@ def main():
 
     create_metric_output_files()
 
+    if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
+        #only train on the first 2 batches
+        print('only training on the first 2 batches')
+        num_train_batches = 2
+
     for epoch in range(num_epochs + 1):
-        print("Epoch: ", epoch)
+        print("planning: %d epochs.  Starting epoch: %d" % (num_epochs, epoch))
 
         # Train on data sorted by image_width for the first 20 epochs, and random orderings after that
         # if epoch > -1:
@@ -983,6 +989,7 @@ def main():
                           learning_rate: lrate
                           }
             # Write to tensorboard
+            #pdb.set_trace()
             if glob_step % 200 == 0:
 
                 output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
@@ -990,17 +997,17 @@ def main():
                 summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
-
+                print("global step: %d loss: %f" %(glob_step, loss))
             else:
                 output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
                 _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
                                                                          feed_dict=input_data)
 
-            if i == 0:
-                print("loss:", loss)
-                print("glob step", glob_step)
+                if loss <= 0.01:
+                    break
 
             if i == 0:
+                print("global step: %d loss: %f" % (glob_step, loss))
                 validation_loss = get_loss(img, val_encoder_input_data_batches,
                                            decoder_lengths, val_sequence_lengths_batches,
                                            decoder_inputs, val_decoder_input_data_batches,
