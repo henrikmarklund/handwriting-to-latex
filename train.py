@@ -9,7 +9,12 @@ import datetime
 import json
 from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 
-### Outline
+
+### Acknowledgments
+## The model in here is an adaption of the Neural Machine Translation model described in
+## in the tutorial on Neural Machine Translation: https://github.com/tensorflow/nmt
+## We switch the encoder to a convolutional neural net matching
+## the works of https://guillaumegenthial.github.io/image-to-latex.html
 
 
 ## CONFIG:
@@ -66,9 +71,6 @@ buckets_dict = {(40, 160): 0,
                 (160, 400): 16,
                 (200, 500): 17,
                 (800, 800): 18}
-
-# 2. Try runnin it on the GPU for 1 hour (I suggest having a cap of token length 50, but increase the num samples to a lot) (All in the Config up top). If you want to play with different learning rates, I've not created a config for this yet. Rather there is a function called: get_learning_rate that handles it all.
-# 3. My sense is that it is probably way to slow but by running it on a GPU we can get a sense of how slow it is, and how much faster it needs to become. Right now I've got no sense, I but I've started tracking it for a batch.
 
 def get_max_shape(data_batch):
     max_height = 0
@@ -468,6 +470,7 @@ def get_loss(img, encoder_input_data_batches,
 def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
     # Encoder
     # One of Genthails's encoder implementations (from paper)
+    # http://cs231n.stanford.edu/reports/2017/pdfs/815.pdf
     img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
 
     img = tf.cast(img, tf.float32) / 255
