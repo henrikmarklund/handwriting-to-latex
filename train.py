@@ -7,21 +7,22 @@ from matplotlib import pyplot as plt
 import cv2
 import datetime
 import json
+from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 
 ### Outline
 
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 1500
+hparams['num_epochs'] = 4
 hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
-hparams['max_train_num_samples'] = 10
-hparams['max_val_num_samples'] = 10
+hparams['max_train_num_samples'] = 16
+hparams['max_val_num_samples'] = 16
 hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 512  # LSTM number of units
-hparams['OVERFIT_TO_SMALL_SAMPLE'] = True
+hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
 
 # Learning rate config
 hparams['warm_up_rate'] = 0.0001
@@ -32,19 +33,16 @@ hparams['num_decay_epochs'] = 10
 hparams['target_rate'] = 0.00001
 calculate_val_loss = False
 
+hparams['restore_from_checkpoint'] = True
 
 
-RESTORE_FROM_CHECKPOINT = False
 CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
-max_token_length = 50
-
-OVERFIT_TO_SMALL_SAMPLE = False
 
 ## FLOYDHUB CONFIG
 data = '../data/'
 output = '../output/'
 
-ON_FLOYDHUB = False
+ON_FLOYDHUB = True
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -300,7 +298,7 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
 
 
 def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, target_token_index):
-    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
+    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=hparams['max_token_length'],
                             max_num_samples=max_num_samples)
 
     for k in range(len(dataset) - 1):
@@ -559,8 +557,9 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         embedding_decoder, decoder_inputs)
 
     # Build RNN cell
-    decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
+    #decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
 
+    decoder_cell = tf.nn.rnn_cell.LSTMCell(num_units)
 
     # Using this instead compared to NMT tutorial so we can initialize with orthogonal intializer (like Genthail)
     #decoder_cell = tf.nn.rnn_cell.LSTMCell(
@@ -681,13 +680,15 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         return embedding_decoder, decoder_cell, decoder_initial_state, projection_layer, img
 
 
+
+
 def inference_tensor(target_token_index,
               inference_batch_size,
               embedding_decoder,
               decoder_cell,
               decoder_initial_state,
               projection_layer,
-              maximum_iterations = max_token_length):
+              maximum_iterations = hparams['max_token_length']):
     """
     :param target_token_index:
     :param batch_for_inference:
@@ -726,7 +727,7 @@ def predict_batch(sess,
                   decoder_initial_state,
                   projection_layer,
                   img,
-                  maximum_iterations=max_token_length):
+                  maximum_iterations=hparams['max_token_length']):
     #for b in batches:
     batch_len = batch.shape[0]
     translation_t, logits_t = inference_tensor(target_token_index,
@@ -738,21 +739,77 @@ def predict_batch(sess,
     translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
     return translation,logits
 
+
+def inference_tensor_beam(target_token_index,
+              inference_batch_size,
+              embedding_decoder,
+              decoder_cell,
+              encoder_state,
+              projection_layer,
+              beam_width,
+              maximum_iterations):
+
+    tgt_sos_id = target_token_index['**start**']  # 1
+    tgt_eos_id = target_token_index['**end**']  # 0
+
+
+    decoder_initial_state = tf.contrib.seq2seq.tile_batch(
+        encoder_state, multiplier=beam_width)
+
+    decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+        cell=decoder_cell,
+        embedding=embedding_decoder,
+        start_tokens=tf.fill([inference_batch_size], tgt_sos_id),
+        end_token=tgt_eos_id,
+        initial_state=decoder_initial_state,
+        beam_width=beam_width,
+        output_layer=projection_layer,
+        length_penalty_weight=0.0)
+
+    # Dynamic decoding
+    outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+        inference_decoder, maximum_iterations=maximum_iterations)
+    print(maximum_iterations)
+    translations = outputs.predicted_ids
+    logits = outputs.rnn_output
+    return translations,logits
+
+def predict_batch_beam(sess,
+                  batch,
+                  target_token_index,
+                  embedding_decoder,
+                  decoder_cell,
+                  encoder_state,
+                  projection_layer,
+                  img,
+                  beam_size,
+                  maximum_iterations=hparams['max_token_length']):
+    #for b in batches:
+    batch_len = batch.shape[0]
+    translation_t, logits_t = inference_tensor_beam(target_token_index,
+              batch_len,
+              embedding_decoder,
+              decoder_cell,
+              encoder_state,
+              projection_layer,
+              beam_size,
+              maximum_iterations)
+    translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
+    return translation,logits
+
+
 def initialize_variables(sess, restore, path):
     
-    if RESTORE_FROM_CHECKPOINT:
+    if restore:
         print('restoring')
-        tf_loader = tf.train.Saver()
-        tf_loader.restore(sess, CHECKPOINT_PATH + '/model_9.ckpt')
+        tf_loader = tf.train.Saver(allow_empty=False)
+        tf_loader.restore(sess,path)
     else:
         print('reinitializing')
         sess.run(tf.global_variables_initializer())
 
 
 def create_hparams_log():
-
-
-
     file = open(output + "hparams.txt","w") 
     file.write(json.dumps(hparams, indent=4))
 
@@ -835,8 +892,11 @@ def main():
 
     
     sess = tf.Session()
-    tf_saver = tf.train.Saver()
-    initialize_variables(sess, restore=True, path=CHECKPOINT_PATH + '/model_9.ckpt')
+    tf_saver = tf.train.Saver(save_relative_paths=True)
+
+    print_tensors_in_checkpoint_file(file_name='/checkpoints/checkpoints/model_10.ckpt', tensor_name='', all_tensors=False, all_tensor_names=True)
+
+    initialize_variables(sess, restore=hparams['restore_from_checkpoint'], path='/checkpoints/checkpoints/model_10.ckpt')
 
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
