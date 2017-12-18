@@ -28,6 +28,7 @@ hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 512  # LSTM number of units
 hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
+hparams['visualize_attention'] = True
 
 # Learning rate config
 hparams['warm_up_rate'] = 0.0001
@@ -47,7 +48,7 @@ CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-e
 data = '../data/'
 output = '../output/'
 
-ON_FLOYDHUB = True
+ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
     output = '/output/'
@@ -145,7 +146,7 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
 
             if image is None:
                 #what does this even mean?
-                print("Id was none: ", idx)
+                print("Image with id: " + str(idx) + " was not loaded")
                 continue
             image = image.astype(np.uint8)
             if len(tokens) <= max_token_length:
@@ -281,7 +282,7 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
                         decoder_target_data[i, t - 1] = target_token_index[token]
 
                 else:
-                    print("Token %s in %d not in V" % (token, idx))
+                    #print("Token %s in %d not in the Vocabulary" % (token, idx))
                     num_other = num_other + 1
                     decoder_input_data[i, t] = target_token_index['**unknown**']
 
@@ -320,8 +321,6 @@ def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, 
 
 def get_learning_rate(global_step, num_train_batches):
     epoch = int(float(global_step) / num_train_batches)
-
-
 
     if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
 
@@ -542,7 +541,7 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         attention_depth, attention_states, scale=True)  # Can try scale = False
 
     # Decoder: from seq2seq tutorial
-    embedding_size = 80  # In Genthail's paper he says he has 80 embeddings which I believe corresponds to embedding_size
+    embedding_size = 80  # We follow Genthail's suggestion of 80 embedding size 80
 
     decoder_inputs = tf.placeholder(tf.uint16, [None, None],
                                     name='decoder_inputs')  # Supposed to be a sequence of numbers corresponding to the different tokens in the sentence
@@ -554,8 +553,8 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         "embedding_encoder", [token_vocab_size, embedding_size], tf.float32)  # tf.float32 was default in the NMT tutorial
 
     # Look up embedding:
-    #   decoder_inputs: [max_time, batch_size]
-    #   decoder_emb_inp: [max_time, batch_size, embedding_size]
+    #   decoder_inputs: [batch_size, max_time]
+    #   decoder_emb_inp: [batch_size, max_time, embedding_size]
     decoder_emb_inp = tf.nn.embedding_lookup(
         embedding_decoder, decoder_inputs)
 
@@ -573,10 +572,10 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     if use_attention:
         decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
             decoder_cell, attention_mechanism,
-            attention_layer_size=512)
+            alignment_history=hparams['visualize_attention'],
+            attention_layer_size=hparams['num_units'])
 
         ## Set initial state of decoder to zero (possible to use previous state)
-
 
         if use_encoding_average_as_initial_state:
             decoder_initial_state = decoder_cell.zero_state(batch_size, tf.float32).clone(cell_state=encoder_state)
@@ -606,6 +605,8 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder,
                                                       output_time_major=False)  ## Understand parameter Impute finished
     logits = outputs.rnn_output
+
+
 
     global_step = tf.Variable(0, trainable=False)  ## IMPORTANT
 
@@ -683,8 +684,6 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         return embedding_decoder, decoder_cell, decoder_initial_state, projection_layer, img
 
 
-
-
 def inference_tensor(target_token_index,
               inference_batch_size,
               embedding_decoder,
@@ -714,13 +713,16 @@ def inference_tensor(target_token_index,
         decoder_cell, inference_helper, decoder_initial_state,
         output_layer=projection_layer)
     # Dynamic decoding
-    outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+    outputs, final_state, _ = tf.contrib.seq2seq.dynamic_decode(
         inference_decoder, maximum_iterations=maximum_iterations)
+
+
+    if hparams['visualize_attention']:
+        attention_images = final_state[0].alignment_history.stack()
+
     translations = outputs.sample_id
     logits = outputs.rnn_output
-    return translations,logits
-
-
+    return translations,logits, attention_images
 
 def predict_batch(sess,
                   batch,
@@ -733,14 +735,14 @@ def predict_batch(sess,
                   maximum_iterations=hparams['max_token_length']):
     #for b in batches:
     batch_len = batch.shape[0]
-    translation_t, logits_t = inference_tensor(target_token_index,
+    translation_t, logits_t, attention_images_t = inference_tensor(target_token_index,
               batch_len,
               embedding_decoder,
               decoder_cell,
               decoder_initial_state,
               projection_layer)
-    translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
-    return translation,logits
+    translation, logits, attention_images = sess.run([translation_t, logits_t, attention_images_t], feed_dict={img: batch})
+    return translation,logits, attention_images
 
 
 def inference_tensor_beam(target_token_index,
@@ -851,7 +853,7 @@ def main():
     target_tokens = token_vocabulary  # TODO: Refactor this. Currently duplicate naming
 
     token_vocab_size = len(target_tokens)
-    # todo: document what was lifted from tutorials and what we wrote ourselves
+    
     target_token_index = dict(
         [(token, i) for i, token in enumerate(target_tokens)])
 
