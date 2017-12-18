@@ -1,9 +1,15 @@
 # handwriting-to-latex
 ```
-pip3 install -U floyd-cli
 pip3 install tf-nightly
 pip3 install opencv-python
+pip3 install -U floyd-cli
+```
 
+
+
+# Running it on Floyd hub
+
+```
 # Approach 1: Multi-state Pipeline Approach
 
 floyd run --gpu --data henrikmarklund/datasets/data_seg_ocr/1:/data_seg_ocr --mode jupyter
@@ -21,9 +27,9 @@ floyd run --gpu --data henrikmarklund/datasets/im2latex-100k/2:/data 'python3 us
 
 ## Keras version with Jupyter 
 floyd run --gpu --data henrikmarklund/datasets/im2latex-100k/2:/data --mode jupyter
-
-
 ```
+
+
 
 
 
