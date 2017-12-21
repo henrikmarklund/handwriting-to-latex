@@ -7,17 +7,19 @@ from matplotlib import pyplot as plt
 import cv2
 import datetime
 import json
-import pdb
-from operator import itemgetter
-from random import shuffle
-from tensor2tensor.layers.common_attention import add_timing_signal_nd
+from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 
-### Outline
+
+### Acknowledgments
+## The model in here is an adaption of the Neural Machine Translation model described in
+## in the tutorial on Neural Machine Translation: https://github.com/tensorflow/nmt
+## We switch the encoder to a convolutional neural net matching
+## the works of https://guillaumegenthial.github.io/image-to-latex.html
 
 
 ## CONFIG:
 hparams = {}
-hparams['num_epochs'] = 2
+hparams['num_epochs'] = 4
 hparams['max_token_length'] = 70
 hparams['mini_batch_size'] = 16
 hparams['max_train_num_samples'] = 16
@@ -26,26 +28,26 @@ hparams['use_attention'] = True
 hparams['use_encoding_average_as_initial_state'] = False
 hparams['num_units'] = 512  # LSTM number of units
 hparams['OVERFIT_TO_SMALL_SAMPLE'] = False
+hparams['visualize_attention'] = True
 
 # Learning rate config
-hparams['warm_up_rate'] = 0.00001
+hparams['warm_up_rate'] = 0.0001
 hparams['num_epochs_warm_up'] = 3
 hparams['base_learning_rate'] = 0.0004
 hparams['num_epochs_constant_lrate'] = 3
-hparams['num_decay_epochs'] = 30
+hparams['num_decay_epochs'] = 10
 hparams['target_rate'] = 0.00001
-calculate_val_loss = True
+calculate_val_loss = False
 
-RESTORE_FROM_CHECKPOINT = False
-# whether or not to create the 'dataset' structure freshly from the image files or from a cached pickle
-LOAD_FRESHLY = True
+hparams['restore_from_checkpoint'] = True
+
+
+CHECKPOINT_PATH = "/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints"
 
 ## FLOYDHUB CONFIG
-#data = '../data/'
 data = '../data/'
 output = '../output/'
 
-#todo change these three back before cloud run
 ON_FLOYDHUB = False
 if (ON_FLOYDHUB):
     data = '/data/'
@@ -70,9 +72,6 @@ buckets_dict = {(40, 160): 0,
                 (160, 400): 16,
                 (200, 500): 17,
                 (800, 800): 18}
-
-BIG_BUCKETS = [17, 18]
-
 
 def get_max_shape(data_batch):
     max_height = 0
@@ -111,16 +110,6 @@ def pad_images(data_batch):
     return new_data_batch
 
 
-def sort_key(bucket):
-    if len(bucket) == 0:
-        return 0
-    else:
-        if len(bucket[0]):
-            return bucket[0][0].shape[1] * 1000 + bucket[0][0].shape[0]
-        else:
-            return 0
-
-
 def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_samples=5000):
     buckets = [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []]
 
@@ -156,8 +145,8 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
             image = cv2.imread(image_folder + file_name, cv2.IMREAD_GRAYSCALE)
 
             if image is None:
-                # what does this even mean?
-                print("Id was none: ", idx)
+                #what does this even mean?
+                print("Image with id: " + str(idx) + " was not loaded")
                 continue
             image = image.astype(np.uint8)
             if len(tokens) <= max_token_length:
@@ -166,11 +155,12 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
                 # is **end** already there?
                 # image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) #Grey scale
 
+
                 seq_length = len(token_sequence.split())
 
                 relevant_bucket_id = buckets_dict[image.shape]
 
-                if relevant_bucket_id in BIG_BUCKETS:
+                if relevant_bucket_id == 18 or relevant_bucket_id == 17:
                     continue
 
                 buckets[relevant_bucket_id].append([image, token_sequence, seq_length])
@@ -200,15 +190,13 @@ def load_raw_data(dataset_name, mini_batch_size, max_token_length=400, max_num_s
                     padded_data_batch = np.array(padded_data_batch)
                     dataset.append(padded_data_batch)
                     data_batch = []
-
-        if (len(data_batch) == mini_batch_size):
+        if (len(data_batch) != 0):
             # for some reason the algorithm generates empty data batches sometimes
             padded_data_batch = pad_images(data_batch)
             padded_data_batch = np.array(padded_data_batch)
             dataset.append(padded_data_batch)
 
-    for k in range(len(dataset)):
-        assert (len(dataset[k]) == mini_batch_size)
+
     return dataset
 
 
@@ -220,7 +208,7 @@ def split_dataset(dataset):
     target_texts_batches = []
     sequence_lengths_batches = []
 
-    for batch in range(len(dataset)):
+    for batch in range(len(dataset) ):
         temp = dataset[batch]
         if (len(temp) == 0):
             bob = None
@@ -249,7 +237,6 @@ def split_dataset(dataset):
 
 
 def get_vocabulary(dataset):
-    print("HI MOM! ", data)
     if dataset == "small":
         vocab = [line for line in open(data + 'tin/tiny_vocab.txt')]
     elif dataset == "test":
@@ -295,7 +282,7 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
                         decoder_target_data[i, t - 1] = target_token_index[token]
 
                 else:
-                    print("Token %s in %d not in V" % (token, idx))
+                    #print("Token %s in %d not in the Vocabulary" % (token, idx))
                     num_other = num_other + 1
                     decoder_input_data[i, t] = target_token_index['**unknown**']
 
@@ -313,41 +300,15 @@ def create_output_int_sequences(target_texts_batches, sequence_lengths_batches, 
     return decoder_input_data_batches, decoder_target_data_batches
 
 
-def dump_data_by_size(name, sorted_data):
-    current_indices = None
-    current_shape = None
-    for idx, img_batch in enumerate(sorted_data[0]):
-        if current_indices is None:
-            # first iteration, do not save anything
-            current_indices = [idx]
-            current_shape = img_batch[0].shape
-            continue
-
-        if img_batch[0].shape == current_shape:
-            current_indices.append(idx)
-        else:
-            current_data_set = [
-                itemgetter(*current_indices)(sorted_data[0]),
-                itemgetter(*current_indices)(sorted_data[1]),
-                itemgetter(*current_indices)(sorted_data[2]),
-                itemgetter(*current_indices)(sorted_data[3]),
-                itemgetter(*current_indices)(sorted_data[4])
-            ]
-            dump_data_set(current_data_set, name + str(current_shape))
-            current_indices = [idx]
-            current_shape = img_batch[0].shape
-            # set the current mini batch equal to the current_mini batch
-
-
 def load_data(dataset_name, mini_batch_size, max_token_length, max_num_samples, target_token_index):
-    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=max_token_length,
+    dataset = load_raw_data(dataset_name, mini_batch_size, max_token_length=hparams['max_token_length'],
                             max_num_samples=max_num_samples)
 
-    #dataset.sort(key=sort_key)
+    for k in range(len(dataset) - 1):
+        assert (len(dataset[k]) == mini_batch_size)
     encoder_input_data_batches, target_texts_batches, sequence_lengths_batches = split_dataset(dataset)
     decoder_input_data_batches, decoder_target_data_batches = create_output_int_sequences(target_texts_batches,
-                                                                                          sequence_lengths_batches,
-                                                                                          target_token_index)
+                                                                                          sequence_lengths_batches, target_token_index)
     return encoder_input_data_batches, target_texts_batches, sequence_lengths_batches, decoder_input_data_batches, decoder_target_data_batches
 
 
@@ -372,11 +333,12 @@ def get_learning_rate(global_step, num_train_batches):
             # Over 10 epochs decay learning rate from 0.0005 to 0.00001
             decay_rate = 0.00001 / 0.0005
             decay_steps = hparams['num_epochs']
-            lr_rate = 0.0005 * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
+            lr_rate =  0.0005 * decay_rate ** (float((global_step - num_train_batches * 6)) / decay_steps)
         else:
             # after 16 epochs of decay, set a new fixed rate
             lr_rate = 0.00001
     else:
+
 
         warm_up_rate = hparams['warm_up_rate']
         num_epochs_warm_up = hparams['num_epochs_warm_up']
@@ -397,11 +359,9 @@ def get_learning_rate(global_step, num_train_batches):
 
             decay_rate = target_rate / base_learning_rate
             decay_steps = num_train_batches * num_decay_epochs
-            lr_rate = base_learning_rate * decay_rate ** (
-                    float((
-                                  global_step - num_train_batches * num_epochs_warm_up + num_epochs_constant_lrate)) / decay_steps)
+            lr_rate = base_learning_rate * decay_rate ** (float((global_step - num_train_batches * num_epochs_warm_up + num_epochs_constant_lrate)) / decay_steps)
         else:
-
+            
             lr_rate = target_rate
 
     return lr_rate
@@ -443,8 +403,8 @@ def get_id_for_bucket(img_batches):
         for j in range(18, -1, -1):
 
             if buckets_dict[shape] == j:
-                # print("Found batch with shape: ", buckets_dict[shape])
-                # print("Batch id: ", idx)
+                #print("Found batch with shape: ", buckets_dict[shape])
+                #print("Batch id: ", idx)
                 shapes_already_found.append(shape)
 
         batch_ids.append(idx)
@@ -458,36 +418,34 @@ def dump_data_set(set, name):
         os.makedirs(output + 'pickles')
     f = open(filename, 'wb+')
     pickle.dump(set, f)
-    print('dumped: ' + name)
+    print('dumped')
     f.close()
 
 
 def load_data_pickle(name):
     print('loading: ', name)
-    filename = data + name + '.pkl'
+    filename = output + 'pickles/' + name + '.pkl'
     f = open(filename, 'rb')
     data_set = pickle.load(f)
     f.close()
     return data_set
 
-
-def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index):
+def get_data_somehow(name, fresh, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index):  
     if (fresh):
-        print('fresh data coming up')
-        _set = load_data(name, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index)
+        _set = load_data(name, _mini_batch_size, _max_token_length, _max_train_num_samples, _target_token_index)        
         dump_data_set(_set, name)
     else:
-        print('yesterday\'s data half price')
         _set = load_data_pickle(name)
 
     return _set
 
-
 def get_loss(img, encoder_input_data_batches,
-             decoder_lengths, sequence_lengths_batches,
-             decoder_inputs, decoder_input_data_batches,
-             decoder_outputs, decoder_target_data_batches,
-             train_loss, sess):
+                        decoder_lengths, sequence_lengths_batches,
+                        decoder_inputs, decoder_input_data_batches,
+                        decoder_outputs, decoder_target_data_batches,
+                        train_loss, sess):
+    
+    
     num_batches = len(sequence_lengths_batches)
     avg_loss = 0
     for i in range(num_batches):
@@ -501,29 +459,40 @@ def get_loss(img, encoder_input_data_batches,
         loss = sess.run(output_tensors,
                         feed_dict=input_data)
 
+        
         avg_loss = avg_loss + loss[0]
 
     avg_loss = avg_loss / num_batches
     return avg_loss
 
 
-def std_ocr_convnet(img):
-    out = tf.layers.conv2d(img, 64, 3, 1, "SAME", activation=tf.nn.relu, name='conv1')
-    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
+def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
+    # Encoder
+    # One of Genthails's encoder implementations (from paper)
+    # http://cs231n.stanford.edu/reports/2017/pdfs/815.pdf
+    img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
 
-    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu, name='conv2')
-    out = tf.layers.max_pooling2d(out, 2, 2, "SAME")
+    img = tf.cast(img, tf.float32) / 255
 
-    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu, name='conv3')
+    batch_size = tf.shape(img)[0]
 
-    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu, name='conv4')
+    # Conv + max pooling
+    out = tf.layers.conv2d(img, 64, 3, 1, "SAME", activation=tf.nn.relu)
+    # Conv + max pooling
+    out = tf.layers.conv2d(out, 128, 3, 1, "SAME", activation=tf.nn.relu)
+
+    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)  # regular conv -> id
+    #out = tf.layers.batch_normalization(out)
+
+    out = tf.layers.conv2d(out, 256, 3, 1, "SAME", activation=tf.nn.relu)  # regular conv -> id
     out = tf.layers.max_pooling2d(out, (2, 1), (2, 1), "SAME")
 
-    out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu, name='conv5')
+    out = tf.layers.conv2d(out, 512, 3, 1, "SAME", activation=tf.nn.relu)  # regular conv -> id
     out = tf.layers.max_pooling2d(out, (1, 2), (1, 2), "SAME")
 
-    # encoder representation, shape = (batch size, height', width', 512)
-    out = tf.layers.conv2d(out, 512, 3, 1, "VALID", activation=tf.nn.relu)
+    # Conv valid
+    out = tf.layers.conv2d(out, 512, 3, 1, "VALID", activation=tf.nn.relu, name="last_conv_layer")  # conv
+    #out = tf.layers.batch_normalization(out)
 
     ## Out is now a H'*W' encoding of the image
 
@@ -531,114 +500,26 @@ def std_ocr_convnet(img):
     # H= out.shape[1]
     # W= out.shape[2]
     # C= out.shape[3]
+
     H = tf.shape(out)[1]
     W = tf.shape(out)[2]
 
-    out = add_timing_signal_nd(out)
+    # out = add_timing_signal_nd(out)
     seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
 
-    return seq
-
-
-def dense_net(cast_img, _depth, _growth_rate):
-
-    def conv(name, l, channel, stride):
-        return tf.layers.conv2d(l, channel,
-                                kernel_size=3,
-                                strides=stride,
-                                padding="SAME",
-                                name=name,
-                                activation=None,
-                                use_bias=False,
-                                kernel_regularizer=None,
-                                kernel_initializer=tf.random_normal_initializer(stddev=np.sqrt(2.0 / 9 / channel)))
-
-    def add_layer(name, l, growth_rate):
-        shape = l.get_shape().as_list()
-        in_channel = shape[3]
-        with tf.variable_scope(name) as scope:
-            c = tf.layers.batch_normalization(l, name='bn1')
-            c = tf.nn.relu(c)
-            c = conv('conv1', c, growth_rate, 1)
-            l = tf.concat([c, l], 3)
-        return l
-
-    def add_transition(name, l):
-        shape = l.get_shape().as_list()
-        in_channel = shape[3]
-        with tf.variable_scope(name) as scope:
-            l = tf.layers.batch_normalization(l, name='bn1')
-            l = tf.nn.relu(l)
-            l = tf.layers.conv2d(l, in_channel, kernel_size=1, strides=1, use_bias=False, activation=tf.nn.relu, name='conv1')
-            l = tf.layers.average_pooling2d(l, pool_size=2, strides=2, name='pool')
-        return l
-
-    def dense_net(input, depth, growth_rate):
-        N = int((depth - 4) / 3)
-        l = conv('conv0', input, 16, 1)
-        with tf.variable_scope('block1') as scope:
-
-            for i in range(N):
-                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
-            l = add_transition('transition1', l)
-
-        with tf.variable_scope('block2') as scope:
-
-            for i in range(N):
-                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
-            l = add_transition('transition2', l)
-
-        with tf.variable_scope('block3') as scope:
-
-            for i in range(N):
-                l = add_layer('dense_layer.{}'.format(i), l, growth_rate)
-        l = tf.layers.batch_normalization(l, name='bnlast')
-        l = tf.nn.relu(l)
-        #l = GlobalAvgPooling('gap', l)
-
-        # I am undecided as to whether this global average pooling gives a useful result
-        # I don't really know what the shape is after and before this operation
-        # axis = [1, 2]
-        # l = tf.reduce_mean(l, axis, name='idk_global_average_pooling')
-        return l
-
-    out = dense_net(cast_img, _depth, _growth_rate)
-    print('out', out)
-    print('shape of ', tf.shape(out))
-    ## Out is now an encoding of the image.  I do not know the dimensions
-
-    ## We want to turn this into a sequence of vectors: (e1, e2 ... en)
-    # H= out.shape[1]
-    # W= out.shape[2]
-    # C= out.shape[3]
-    pdb.set_trace()
-    H = tf.shape(out)[0]
-    W = tf.shape(out)[1]
-
-    out = add_timing_signal_nd(out)
-    seq = tf.reshape(tensor=out, shape=[-1, H * W, 512])
-    return seq
-
-
-def create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state, training=True):
-    # Encoder
-    # Adam Added skip connection to one of Genthails's encoder implementations (from paper)
-    img = tf.placeholder(tf.uint8, [None, None, None, 1], name='img')
-    batch_size = tf.shape(img)[0]
-
-    cast_img = tf.cast(img, tf.float32) / 255.
-
-    #seq = dense_net(cast_img, _depth=35, _growth_rate=16)
-    seq = std_ocr_convnet(cast_img)
+    # TODO: Add positional encodings
 
     # First state of the decoder consists of two vectors, the hidden state (h0) and the memory (c0).
     # Usually the hidden state refers to [h0, c0]. So a little bit of overloading of hidden state (I think)
     # This is how Genthail implements it
 
+    # tf.reset_default_graph()
+
+
     if use_encoding_average_as_initial_state:
         img_mean = tf.reduce_mean(seq, axis=1)
 
-        # img_mean = tf.layers.batch_normalization(img_mean)
+        #img_mean = tf.layers.batch_normalization(img_mean)
 
         W = tf.get_variable("W", shape=[512, num_units])
         b = tf.get_variable("b", shape=[num_units])
@@ -656,13 +537,11 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     attention_depth = num_units
 
     # Create an attention mechanism
-    print('attention d', attention_depth)
-    print('attention_states', attention_states)
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
         attention_depth, attention_states, scale=True)  # Can try scale = False
 
     # Decoder: from seq2seq tutorial
-    embedding_size = 80  # In Genthail's paper he says he has 80 embeddings which I believe corresponds to embedding_size
+    embedding_size = 80  # We follow Genthail's suggestion of 80 embedding size 80
 
     decoder_inputs = tf.placeholder(tf.uint16, [None, None],
                                     name='decoder_inputs')  # Supposed to be a sequence of numbers corresponding to the different tokens in the sentence
@@ -671,28 +550,30 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
 
     # Embedding matrix
     embedding_decoder = tf.get_variable(
-        "embedding_encoder", [token_vocab_size, embedding_size],
-        tf.float32)  # tf.float32 was default in the NMT tutorial
+        "embedding_encoder", [token_vocab_size, embedding_size], tf.float32)  # tf.float32 was default in the NMT tutorial
 
     # Look up embedding:
-    #   decoder_inputs: [max_time, batch_size]
-    #   decoder_emb_inp: [max_time, batch_size, embedding_size]
+    #   decoder_inputs: [batch_size, max_time]
+    #   decoder_emb_inp: [batch_size, max_time, embedding_size]
     decoder_emb_inp = tf.nn.embedding_lookup(
         embedding_decoder, decoder_inputs)
 
     # Build RNN cell
-    decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
+    #decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
+
+    decoder_cell = tf.nn.rnn_cell.LSTMCell(num_units)
 
     # Using this instead compared to NMT tutorial so we can initialize with orthogonal intializer (like Genthail)
-    # decoder_cell = tf.nn.rnn_cell.LSTMCell(
-    # num_units,
-    # initializer=tf.orthogonal_initializer,
-    # )
+    #decoder_cell = tf.nn.rnn_cell.LSTMCell(
+        #num_units,
+        #initializer=tf.orthogonal_initializer,
+    #)
 
     if use_attention:
         decoder_cell = tf.contrib.seq2seq.AttentionWrapper(
             decoder_cell, attention_mechanism,
-            attention_layer_size=512)
+            alignment_history=hparams['visualize_attention'],
+            attention_layer_size=hparams['num_units'])
 
         ## Set initial state of decoder to zero (possible to use previous state)
 
@@ -724,6 +605,8 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
     outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder,
                                                       output_time_major=False)  ## Understand parameter Impute finished
     logits = outputs.rnn_output
+
+
 
     global_step = tf.Variable(0, trainable=False)  ## IMPORTANT
 
@@ -782,35 +665,32 @@ def create_graph(token_vocab_size, num_units, use_attention, use_encoding_averag
         # config=tf.ConfigProto(log_device_placement=True) logs whether it runs on the gpus
         # sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 
-    merged = tf.summary.merge_all()
 
-    graph = {'merged': merged,
-              'update_step': update_step,
-              'train_loss': train_loss,
-              'optimizer': optimizer,
-              'global_norm': global_norm,
-              'gradient_norms': gradient_norms,
-              'global_step': global_step,
-              'img': img,
-              'decoder_lengths': decoder_lengths,
-              'decoder_inputs': decoder_inputs,
-              'decoder_outputs': decoder_outputs,
-              'learning_rate': learning_rate,
-              'embedding_decoder': embedding_decoder,
-              'decoder_cell': decoder_cell,
-              'decoder_initial_state': decoder_initial_state,
-              'projection_layer': projection_layer
-        }
-    return graph
+    merged = tf.summary.merge_all()
+    if training:
+        return [merged,
+                update_step,
+                train_loss,
+                optimizer,
+                global_norm,
+                gradient_norms,
+                global_step,
+                img,
+                decoder_lengths,
+                decoder_inputs,
+                decoder_outputs,
+                learning_rate]
+    else:
+        return embedding_decoder, decoder_cell, decoder_initial_state, projection_layer, img
 
 
 def inference_tensor(target_token_index,
-                     inference_batch_size,
-                     embedding_decoder,
-                     decoder_cell,
-                     decoder_initial_state,
-                     projection_layer,
-                     maximum_iterations=hparams['max_token_length']):
+              inference_batch_size,
+              embedding_decoder,
+              decoder_cell,
+              decoder_initial_state,
+              projection_layer,
+              maximum_iterations = hparams['max_token_length']):
     """
     :param target_token_index:
     :param batch_for_inference:
@@ -826,19 +706,23 @@ def inference_tensor(target_token_index,
 
     # Helper
     inference_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(embedding_decoder,
-                                                                tf.fill([inference_batch_size], tgt_sos_id), tgt_eos_id)
+        tf.fill([inference_batch_size], tgt_sos_id), tgt_eos_id)
 
     # Decoder
     inference_decoder = tf.contrib.seq2seq.BasicDecoder(
         decoder_cell, inference_helper, decoder_initial_state,
         output_layer=projection_layer)
     # Dynamic decoding
-    outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+    outputs, final_state, _ = tf.contrib.seq2seq.dynamic_decode(
         inference_decoder, maximum_iterations=maximum_iterations)
+
+
+    if hparams['visualize_attention']:
+        attention_images = final_state[0].alignment_history.stack()
+
     translations = outputs.sample_id
     logits = outputs.rnn_output
-    return translations, logits
-
+    return translations,logits, attention_images
 
 def predict_batch(sess,
                   batch,
@@ -849,44 +733,108 @@ def predict_batch(sess,
                   projection_layer,
                   img,
                   maximum_iterations=hparams['max_token_length']):
-    # for b in batches:
+    #for b in batches:
     batch_len = batch.shape[0]
-    translation_t, logits_t = inference_tensor(target_token_index,
-                                               batch_len,
-                                               embedding_decoder,
-                                               decoder_cell,
-                                               decoder_initial_state,
-                                               projection_layer)
+    translation_t, logits_t, attention_images_t = inference_tensor(target_token_index,
+              batch_len,
+              embedding_decoder,
+              decoder_cell,
+              decoder_initial_state,
+              projection_layer)
+    translation, logits, attention_images = sess.run([translation_t, logits_t, attention_images_t], feed_dict={img: batch})
+    return translation,logits, attention_images
+
+
+def inference_tensor_beam(target_token_index,
+              inference_batch_size,
+              embedding_decoder,
+              decoder_cell,
+              encoder_state,
+              projection_layer,
+              beam_width,
+              maximum_iterations):
+
+    tgt_sos_id = target_token_index['**start**']  # 1
+    tgt_eos_id = target_token_index['**end**']  # 0
+
+
+    decoder_initial_state = tf.contrib.seq2seq.tile_batch(
+        encoder_state, multiplier=beam_width)
+
+    decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+        cell=decoder_cell,
+        embedding=embedding_decoder,
+        start_tokens=tf.fill([inference_batch_size], tgt_sos_id),
+        end_token=tgt_eos_id,
+        initial_state=decoder_initial_state,
+        beam_width=beam_width,
+        output_layer=projection_layer,
+        length_penalty_weight=0.0)
+
+    # Dynamic decoding
+    outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+        inference_decoder, maximum_iterations=maximum_iterations)
+    print(maximum_iterations)
+    translations = outputs.predicted_ids
+    logits = outputs.rnn_output
+    return translations,logits
+
+def predict_batch_beam(sess,
+                  batch,
+                  target_token_index,
+                  embedding_decoder,
+                  decoder_cell,
+                  encoder_state,
+                  projection_layer,
+                  img,
+                  beam_size,
+                  maximum_iterations=hparams['max_token_length']):
+    #for b in batches:
+    batch_len = batch.shape[0]
+    translation_t, logits_t = inference_tensor_beam(target_token_index,
+              batch_len,
+              embedding_decoder,
+              decoder_cell,
+              encoder_state,
+              projection_layer,
+              beam_size,
+              maximum_iterations)
     translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
-    return translation, logits
+    return translation,logits
 
 
-def initialize_variables(sess, saver, restore, path):
+def initialize_variables(sess, restore, path):
+    
     if restore:
         print('restoring')
-        saver.restore(sess, path)
+        tf_loader = tf.train.Saver(allow_empty=False)
+        tf_loader.restore(sess,path)
     else:
         print('reinitializing')
         sess.run(tf.global_variables_initializer())
 
 
 def create_hparams_log():
-    file = open(output + "hparams.txt", "w")
+    file = open(output + "hparams.txt","w") 
     file.write(json.dumps(hparams, indent=4))
 
     file.close()
 
-
 def create_metric_output_files():
-    file = open(output + "metrics.txt", "w")
+
+    file = open(output + "metrics.txt","w") 
+ 
+
 
     file.write("Train loss" + "\t" + "Val loss" + "\t" + "Learning rate" + "\t" + "Global grad norm" + "\n")
 
     file.close()
 
 
+
 def main():
     create_hparams_log()
+
 
     num_epochs = hparams['num_epochs']
     max_token_length = hparams['max_token_length']
@@ -898,68 +846,63 @@ def main():
     num_units = hparams['num_units']  # LSTM number of units
 
     # Create the vocabulary
-    target_tokens = ["**end**", "**start**", "**unknown**"]
+    token_vocabulary = ["**end**", "**start**", "**unknown**"]
 
-    target_tokens.extend(get_vocabulary("train"))
+    token_vocabulary.extend(get_vocabulary("train"))
+
+    target_tokens = token_vocabulary  # TODO: Refactor this. Currently duplicate naming
+
     token_vocab_size = len(target_tokens)
+    
     target_token_index = dict(
         [(token, i) for i, token in enumerate(target_tokens)])
 
     reverse_target_token_index = dict(
         (i, char) for char, i in target_token_index.items())
     print("\n ======================= Loading Data =======================")
-    # new cell
-    print('load freshly: ', LOAD_FRESHLY)
-    train_dataset = get_data_somehow('train', LOAD_FRESHLY, mini_batch_size, max_token_length,
-                                     max_train_num_samples,
-                                     target_token_index)
-    val_dataset = get_data_somehow('val', LOAD_FRESHLY, mini_batch_size, max_token_length,
-                                   max_val_num_samples,
-                                   target_token_index)
+    #new cell
 
-    #dump_data_by_size('train', train_dataset)
-    #dump_data_by_size('val', val_dataset)
+    train_dataset = get_data_somehow('train', True, mini_batch_size, max_token_length, max_train_num_samples, target_token_index)
+    val_dataset = get_data_somehow('val', True, mini_batch_size, max_token_length, max_val_num_samples, target_token_index)
+    
     train_encoder_input_data_batches = train_dataset[0]
     train_target_texts_batches = train_dataset[1]
     train_sequence_lengths_batches = train_dataset[2]
     train_decoder_input_data_batches = train_dataset[3]
     train_decoder_target_data_batches = train_dataset[4]
+
     val_encoder_input_data_batches = val_dataset[0]
     val_target_texts_batches = val_dataset[1]
     val_sequence_lengths_batches = val_dataset[2]
     val_decoder_input_data_batches = val_dataset[3]
     val_decoder_target_data_batches = val_dataset[4]
     print("\n ======================= Data Loaded =======================")
-
+    
     num_train_batches = len(train_target_texts_batches)
     num_val_batches = len(val_target_texts_batches)
     num_train_samples = (num_train_batches - 1) * mini_batch_size + train_target_texts_batches[-1].shape[0]
     num_val_samples = (num_val_batches - 1) * mini_batch_size + val_target_texts_batches[-1].shape[0]
 
-    # new cell
+    #new cell
     print("Num train batches: ", num_train_batches)
     print("Num val batches: ", num_val_batches)
 
     print("Num train samples: ", num_train_samples)
     print("Num val samples: ", num_val_samples)
 
-    g = create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state)
-    merged = g['merged']
-    update_step = g['update_step']
-    train_loss = g['train_loss']
-    optimizer = g['optimizer']
-    global_norm = g['global_norm']
-    gradient_norms = g['gradient_norms']
-    global_step = g['global_step']
-    img = g['img']
-    decoder_lengths = g['decoder_lengths']
-    decoder_inputs = g['decoder_inputs']
-    decoder_outputs = g['decoder_outputs']
-    learning_rate = g['learning_rate']
+    t = create_graph(token_vocab_size, num_units, use_attention, use_encoding_average_as_initial_state)
 
+    merged, update_step, train_loss, optimizer, global_norm, gradient_norms, \
+    global_step, img, decoder_lengths, decoder_inputs, decoder_outputs, learning_rate = t
+
+    
     sess = tf.Session()
-    tf_saver = tf.train.Saver(allow_empty=False, max_to_keep=2, save_relative_paths=True)
-    initialize_variables(sess, saver=tf_saver, restore=RESTORE_FROM_CHECKPOINT, path="/Users/adamjensen/project-environments/handwriting-to-latex-env/output/checkpoints/model_9.ckpt")
+    tf_saver = tf.train.Saver(save_relative_paths=True)
+
+    print_tensors_in_checkpoint_file(file_name='/checkpoints/checkpoints/model_10.ckpt', tensor_name='', all_tensors=False, all_tensor_names=True)
+
+    initialize_variables(sess, restore=hparams['restore_from_checkpoint'], path='/checkpoints/checkpoints/model_10.ckpt')
+
 
     train_writer = tf.summary.FileWriter(output + 'summaries/train/', sess.graph)
 
@@ -986,6 +929,12 @@ def main():
     for step in range(num_train_batches * 20):
         learning_rates.append(get_learning_rate(step, num_train_batches))
 
+    #plt.title('Learning rate (10^) over the steps')
+    #plt.ylabel('learning rate (10 ^)')
+    #plt.xlabel('steps #')
+    #plt.plot(np.log10(learning_rates))
+    #plt.savefig(output + 'learning_rate.png')
+    #plt.close()
 
     total_parameters = 0
     # Get total number of parameters
@@ -1008,86 +957,87 @@ def main():
 
     glob_step = sess.run(
         global_step)  # Get what global step we are at in training already (so that the learning_rate is set correct)
-    # _list = get_id_for_bucket(train_encoder_input_data_batches)
+    #_list = get_id_for_bucket(train_encoder_input_data_batches)
+
 
     create_metric_output_files()
 
-    if hparams['OVERFIT_TO_SMALL_SAMPLE'] == True:
-        #only train on the first 2 batches
-        print('only training on the first 1 batches')
-        num_train_batches = 1
-
     for epoch in range(num_epochs + 1):
-        print("planning: %d epochs.  Starting epoch: %d" % (num_epochs, epoch))
-
-        # Train on data sorted by image_width for the first 15 epochs, and random orderings after that
-        #if epoch > 10:
-        #    print('shuffled')
-        #    idxs = [x for x in range(len(train_encoder_input_data_batches))]
-        #    shuffle(idxs)
-
-        #    train_encoder_input_data_batches = itemgetter(*idxs)(train_encoder_input_data_batches)
-        #    train_target_texts_batches = itemgetter(*idxs)(train_target_texts_batches)
-        #    train_sequence_lengths_batches = itemgetter(*idxs)(train_sequence_lengths_batches)
-        #    train_decoder_input_data_batches = itemgetter(*idxs)(train_decoder_input_data_batches)
-        #    train_decoder_target_data_batches = itemgetter(*idxs)(train_decoder_target_data_batches)
+        print("Epoch: ", epoch)
 
         for i in range(num_train_batches):
+        
+
+
+
             # Calculate running time for batch
             start_time = datetime.datetime.now()
 
             # Calculate the right learning rate for this step.
+
             lrate = get_learning_rate(glob_step, num_train_batches)
-            images = train_encoder_input_data_batches[i]
-            input_data = {img: images,
+
+            
+
+            input_data = {img: train_encoder_input_data_batches[i],
                           decoder_lengths: train_sequence_lengths_batches[i],
                           decoder_inputs: train_decoder_input_data_batches[i],
                           decoder_outputs: train_decoder_target_data_batches[i],
                           learning_rate: lrate
                           }
             # Write to tensorboard
-            #pdb.set_trace()
             if glob_step % 200 == 0:
+
 
                 output_tensors = [merged, update_step, train_loss, optimizer._lr, global_norm, gradient_norms,
                                   global_step]
                 summary, _, loss, lr_rate, global_grad_norm, grad_norms, glob_step = sess.run(output_tensors,
                                                                                               feed_dict=input_data)
                 train_writer.add_summary(summary, glob_step)
-                print("global step: %d loss: %f" %(glob_step, loss))
+                
             else:
+                
+
                 output_tensors = [update_step, train_loss, global_norm, global_step, optimizer._lr]
+
                 _, loss, global_grad_norm, glob_step, lr_rate = sess.run(output_tensors,
                                                                          feed_dict=input_data)
-
-                if loss <= 0.01:
-                    break
+                
 
             if i == 0:
-                print("global step: %d loss: %f" % (glob_step, loss))
+                print("loss:", loss)
+                print("glob step", glob_step)
+
+            if i == 0:
                 validation_loss = get_loss(img, val_encoder_input_data_batches,
-                                           decoder_lengths, val_sequence_lengths_batches,
-                                           decoder_inputs, val_decoder_input_data_batches,
-                                           decoder_outputs, val_decoder_target_data_batches,
-                                           train_loss, sess)
+                        decoder_lengths, val_sequence_lengths_batches,
+                        decoder_inputs, val_decoder_input_data_batches,
+                        decoder_outputs, val_decoder_target_data_batches,
+                        train_loss, sess)  
 
                 training_loss = get_loss(img, train_encoder_input_data_batches,
-                                         decoder_lengths, train_sequence_lengths_batches,
-                                         decoder_inputs, train_decoder_input_data_batches,
-                                         decoder_outputs, train_decoder_target_data_batches,
-                                         train_loss, sess)
+                        decoder_lengths, train_sequence_lengths_batches,
+                        decoder_inputs, train_decoder_input_data_batches,
+                        decoder_outputs, train_decoder_target_data_batches,
+                        train_loss, sess) 
 
-                file = open(output + "metrics.txt", "a")
+                file = open(output + "metrics.txt","a") 
                 lrate_to_file = ('%s' % ('%.8g' % lrate))
-                file.write(str(training_loss) + "\t" + str(validation_loss) + "\t" + lrate_to_file + "\t" + str(
-                    global_grad_norm) + "\n")
+                file.write(str(training_loss) + "\t" + str(validation_loss) + "\t" + lrate_to_file + "\t" + str(global_grad_norm)+ "\n")
 
                 file.close()
         # Run the following in terminal to get up tensorboard: tensorboard --logdir=summaries/train
-
-        save_path = tf_saver.save(sess, output + 'checkpoints/model_a_' + str(epoch) + '.ckpt', global_step=glob_step)
+        
+        
+        
+        save_path = tf_saver.save(sess, output + 'checkpoints/model_'+str(epoch)+'.ckpt')
         print("Model saved in file: %s" % save_path)
+        
+        
 
+
+
+        
 
 if __name__ == '__main__':
     main()

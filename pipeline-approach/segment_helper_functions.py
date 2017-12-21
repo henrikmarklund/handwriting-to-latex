@@ -42,6 +42,12 @@ def get_latex(token):
         latex = "("
     elif token == 'RightPar':
         latex = ")"
+    elif token == 'minus':
+        latex = "-"
+    elif token == 'plus':
+        latex = "+"
+    elif token == 'comma':
+        latex = ","
     else:
         latex = "\\" + token
     return latex
@@ -57,3 +63,29 @@ def get_center_from_image(image_with_position):
     centery = int(position[0] + size[0] / 2)
     
     return (centery, centerx)
+
+
+def split_using_contours(image_with_position):
+
+
+    image = image_with_position['image']
+    
+    im2, contours, hierarchy = cv2.findContours(image,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+
+
+    # Copied from this github: https://gist.github.com/bigsnarfdude/d811e31ee17495f82f10db12651ae82d
+
+    symbols = []
+
+    for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+
+            pad = 1 #padding
+
+            cv2.rectangle(im, (x-pad, y-pad), (x+w+pad, y+h+pad), (0, 255, 0), 2)
+            #print(x, w, y, h)
+            symbol = im_orig[(y-pad):(y+h+pad), (x-pad):(x+w+pad)]
+            symbols.append({ 'symbol': symbol, 'x_cord': x })
+            #cv2.imshow(str(x), symbol)
+            #cv2.waitKey(0)
+

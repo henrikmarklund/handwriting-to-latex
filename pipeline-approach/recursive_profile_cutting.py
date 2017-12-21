@@ -45,63 +45,62 @@ def cut(image_with_position, direction):
     cut_positions = []
     
     
-    last_non_white_index = None
-    
-    
     values_enough_for_split = [0]
     
+    cut_pos_1 = None
+    cut_pos_2 = None
+
+    last_was_white = True
+
     for index, value in enumerate(v):
         #print("Index: ", index)
         #print("value: ", value )
-        if value in values_enough_for_split:
-            white_counter = white_counter + 1
-            
-        else:
-            last_non_white_index = index
-            if reached_first:
-                if white_counter > threshold:
-                    cut_position = int(index - white_counter / 2)
-                    cut_positions.append(cut_position)
-            else:
-                if index != 0:
-                    cut_positions.append(index - 1)
-                else:
-                    cut_positions.append(index)     
-            
-            white_counter = 0        
-            reached_first = True
 
-    #if last_non_white_index == None:
+        if not reached_first:
+            if value == 0:
+                last_was_white = True
+            else:
+                reached_first = True
+                last_was_white = False
+                cut_pos_1 = max(index-1, 0)
+        else:
+            if last_was_white:
+                if not value == 0:
+                    last_was_white = False
+                    cut_pos_1 = index-1
+            else:
+                if value == 0:
+                    last_was_white = True
+                    cut_pos_2 = min(index+1, len(v-1))
+                    cut_positions.append((cut_pos_1, cut_pos_2))
+                    cut_pos_1 = None
+                    cut_pos_2 = None
+   
+            
         
-    if last_non_white_index == len(v):
-        cut_positions.append(last_non_white_index)
-    else:
-        cut_positions.append(last_non_white_index + 1)
+    if cut_pos_1 is not None:
+        cut_pos_2 = len(v-1)
+        cut_positions.append((cut_pos_1, cut_pos_2))
+        cut_pos_1 = None
+        cut_pos_2 = None
         
-       # print white_counter
-        #print(" ")
-    #Make the cuts
     
     #print("Cut positions: ", cut_positions)
     if len(cut_positions) == 0:
         new_images_with_positions.append(image_with_position)
         return new_images_with_positions
     else:
+        for cut_position in cut_positions:
 
-        for idx in range(len(cut_positions)):
-            if idx == len(cut_positions) - 1:
-                #print('last stop')
-                break
-                
             if direction == "VERTICAL":
                 #print("Vertical")
-                new_image = image[:,cut_positions[idx]:cut_positions[idx+1]]
-                new_x_position = position[1] + cut_positions[idx]
+                new_image = image[:,cut_position[0]:cut_position[1]]
+                new_x_position = position[1] + cut_position[0]
                 new_position = (position[0], new_x_position)
             elif direction == "HORIZONTAL":
                 #print("Horizontal")
-                new_image = image[cut_positions[idx]:cut_positions[idx+1],:]
-                new_y_position = position[0] + cut_positions[idx]
+                new_image = image[cut_position[0]:cut_position[1],:]
+                new_y_position = position[0] + cut_position[0]
                 new_position = (new_y_position, position[1])
                                     
                 
@@ -109,8 +108,6 @@ def cut(image_with_position, direction):
 
             new_images_with_positions.append(new_image_with_position)
             
-
-        
         
     return new_images_with_positions
 

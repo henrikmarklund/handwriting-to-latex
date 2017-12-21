@@ -69,7 +69,7 @@ def visualize_training_history(fit_history):
     plt.title('model accuracy')
     plt.ylabel('accuracy')
     plt.xlabel('epoch')
-    plt.legend(['train', 'test'], loc='upper left')
+    plt.legend(['train', 'val'], loc='upper left')
     plt.show()
     # summarize history for loss
     plt.plot(fit_history.history['loss'])
@@ -77,7 +77,7 @@ def visualize_training_history(fit_history):
     plt.title('model loss')
     plt.ylabel('loss')
     plt.xlabel('epoch')
-    plt.legend(['train', 'test'], loc='upper left')
+    plt.legend(['train', 'val'], loc='upper left')
     plt.show()
 
 

@@ -1,10 +1,12 @@
+## Work in progress. Code adapted from https://github.com/tensorflow/nmt
+
 def inference_tensor_beam(target_token_index,
               inference_batch_size,
               embedding_decoder,
               decoder_cell,
               decoder_initial_state,
               projection_layer,
-              beam_size,
+              beam_width,
               maximum_iterations = max_token_length):
     """
     :param target_token_index:
@@ -19,32 +21,26 @@ def inference_tensor_beam(target_token_index,
     tgt_sos_id = target_token_index['**start**']  # 1
     tgt_eos_id = target_token_index['**end**']  # 0
 
-    # Helper
-    inference_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(embedding_decoder,
-        tf.fill([inference_batch_size], tgt_sos_id), tgt_eos_id)
-
-    # Decoder
-    decoder_initial_state = cell.zero_state(batch_size, tf.float32)
 
     decoder_initial_state = tf.contrib.seq2seq.tile_batch(
-        decoder_initial_state, multiplier=beam_size)
+        decoder_initial_state, multiplier=hparams.beam_width)
 
-
-    inference_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
-            cell=decoder_cell,
-            embedding=embedding_decoder,
-            start_tokens=tgt_sos_id,
-            end_token=tgt_eos_id,
-            decoder_initial_state=decoder_initial_state,
-            beam_width=beam_size,
-            output_layer=projection_layer,
-            lenth_penalty_weight=0.0)
+    decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+        cell=decoder_cell,
+        embedding=embedding_decoder,
+        start_tokens=tf.fill([inference_batch_size], tgt_sos_id),
+        end_token=tgt_eos_id,
+        initial_state=decoder_initial_state,
+        beam_width=beam_width,
+        output_layer=projection_layer,
+        length_penalty_weight=0.0)
 
     # Dynamic decoding
     outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
         inference_decoder, maximum_iterations=maximum_iterations)
     translations = outputs.sample_id
-    return translations
+    logits = outputs.rnn_output
+    return translations,logits
 
 def predict_batch_beam(sess,
                   batch,
@@ -54,16 +50,16 @@ def predict_batch_beam(sess,
                   decoder_initial_state,
                   projection_layer,
                   img,
-                  beam_size,
+                  beam_size=4,
                   maximum_iterations=max_token_length):
     #for b in batches:
     batch_len = batch.shape[0]
-    translation_t = inference_tensor(target_token_index,
+    translation_t, logits_t = inference_tensor(target_token_index,
               batch_len,
               embedding_decoder,
               decoder_cell,
               decoder_initial_state,
               projection_layer,
               beam_size)
-    translation = sess.run(translation_t, feed_dict={img: batch})
-    return translation
+    translation, logits = sess.run([translation_t, logits_t], feed_dict={img: batch})
+    return translation,logits
